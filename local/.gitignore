@@ -1,0 +1,5 @@
+# Everything in local/ is personal, per-machine configuration.
+# Only the .gitignore and .env.example are tracked.
+*
+!.gitignore
+!.env.example

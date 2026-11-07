@@ -1,0 +1,5 @@
+# Everything in vault/ is personal knowledge-base data.
+# Only the .gitignore and README.md are tracked.
+*
+!.gitignore
+!README.md

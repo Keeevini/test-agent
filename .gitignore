@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Per-machine config (local/) and the personal vault (vault/) are each ignored by
+# their own nested .gitignore, which keeps local/.gitignore + local/.env.example and
+# vault/.gitignore + vault/README.md tracked. Do NOT add `local/` or `vault/` here:
+# ignoring a directory prevents re-including any file inside it.
+
+# Build / dist
+dist/
+build/
+node_modules/
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.log

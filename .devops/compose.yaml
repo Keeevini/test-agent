@@ -1,0 +1,27 @@
+services:
+  local-agent-ui:
+    build:
+      context: ..
+      dockerfile: .devops/Dockerfile
+    container_name: local-agent-ui
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${UI_PORT:-8000}:8000"
+    environment:
+      LLM_API_URL: "${LLM_API_URL:-http://host.docker.internal:8080/v1}"
+      VAULT_ROOT: /app/vault
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ../vault
+        target: /app/vault
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Entry point: the app lives in src/app.py, exposed as `app` on the `src.app` module.
+    command: ["python", "-m", "uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8000"]
