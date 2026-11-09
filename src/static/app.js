@@ -251,8 +251,7 @@ function finalizeReasoningCard(reasoningCard, reasoningStartTime) {
   Array.from(reasoningCard.header.childNodes).forEach(node => {
     if (node !== icon) node.remove();
   });
-  const titleText = (reasoningCard.header.dataset.thinkingTitle || '').replace(/^Thinking · /, '');
-  const label = titleText ? `Thought: ${titleText} · ` : 'Thought · ';
+  const label = 'Thought · ';
   reasoningCard.header.appendChild(document.createTextNode(label));
   const durSpan = document.createElement('span');
   durSpan.className = 'thought-duration';
