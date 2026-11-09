@@ -251,8 +251,7 @@ function finalizeReasoningCard(reasoningCard, reasoningStartTime) {
   Array.from(reasoningCard.header.childNodes).forEach(node => {
     if (node !== icon) node.remove();
   });
-  const titleText = (reasoningCard.header.dataset.thinkingTitle || '').replace(/^Thinking · /, '');
-  const label = titleText ? `Thought: ${titleText} · ` : 'Thought · ';
+  const label = 'Thought · ';
   reasoningCard.header.appendChild(document.createTextNode(label));
   const durSpan = document.createElement('span');
   durSpan.className = 'thought-duration';
@@ -366,40 +365,55 @@ function renderMarkdown(assistantBody, isFinal = false) {
 
 const THINKING_PARAGRAPH_THRESHOLD = 300;
 
-const THINKING_STOPWORDS = new Set([
-  'i','me','my','myself','we','our','ours','us','you','your','yours','him','his','her','she','it','its','they','them','their','theirs','what','which','who','whom','whose','this','that','these','those','am','is','are','was','were','be','been','being','do','does','did','doing','done','would','can','could','should','will','shall','may','might','must','ought','let','lets',
-  'the','a','an','and','or','but','in','on','at','to','for','with','from','by','of','into','over','under','out','off','up','down','back','again','further','then','once','here','there','when','where','why','how','each','other','some','such','as','if','because','while','until','so','no','not','only','own','same','too','very','s','t','don','just','now','well','also','now',
-  'think','thinking','thought','about','user','asking','ask','asks','question','need','needs','want','wants','get','gets','use','using','check','look','see','start','starting','begin','beginning','end','finish','plan','planning','make','makes','made','first','second','third','next','good','great','okay','ok','now','here','there','back','well','also',
-]);
+// Find the start index of the most recent reasoning part. Parts are delimited
+// by a blank line followed by a bold title (\n\n**Title**). The first part
+// begins at index 0. Searching starts at fromIndex so already-processed text
+// is not re-scanned on every delta.
+function findLastPartBoundary(text, fromIndex) {
+  let pos = fromIndex;
+  let last = fromIndex;
+  while (true) {
+    pos = text.indexOf('\n\n**', pos);
+    if (pos === -1) break;
+    last = pos + 2;
+    pos += 2;
+  }
+  return last;
+}
 
-function parseLeadingBoldTitle(text) {
-  const content = text.trim();
-  const match = content.match(/^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/);
+// Parse the leading bold title from a part's text. Returns null when the bold
+// block is incomplete (still streaming) or absent.
+function parsePartTitle(text, partStart) {
+  const part = text.slice(partStart);
+  const match = part.match(/^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/);
   if (!match) return null;
   return match[1].trim();
 }
 
-function extractThinkingSummary(text) {
-  const words = text.match(/[A-Za-z0-9_]+(?:[.\-'][A-Za-z0-9_]+)*/g) || [];
-  const meaningful = words.filter(w => {
-    const lower = w.toLowerCase();
-    return lower.length > 1 && !THINKING_STOPWORDS.has(lower);
-  });
-  // Use the first few meaningful words to capture the general area of the reasoning.
-  return meaningful.slice(0, 4).join(' ');
-}
-
-// The title is fully determined by the first ~160 chars of the stream: a
-// leading bold title, or the first few words as a fallback. Scanning the whole
-// ever-growing reasoning text on every delta is O(n^2) and starves the tab's
-// CPU, which competes with llama.cpp and stalls generation. Bound the input.
+// The header shows the title of the most recent reasoning part. The title is
+// parsed once per part and cached on the header element (dataset), so the
+// per-delta path is O(1) after the initial parse. No filler-word fallback:
+// if no bold title is present, the header shows bare "Thinking".
 function updateThinkingTitle(header, text) {
-  const prefix = text.slice(0, 160);
-  const boldTitle = parseLeadingBoldTitle(prefix);
-  const title = boldTitle || extractThinkingSummary(prefix);
+  const cachedStart = parseInt(header.dataset.thinkingPartStart, 10) || 0;
+  const partStart = findLastPartBoundary(text, cachedStart);
+
+  if (partStart !== cachedStart) {
+    header.dataset.thinkingPartStart = String(partStart);
+    header.dataset.thinkingTitle = '';
+  }
+
+  if (!header.dataset.thinkingTitle) {
+    const title = parsePartTitle(text, partStart);
+    if (title) {
+      header.dataset.thinkingTitle = title;
+    }
+  }
+
+  const title = header.dataset.thinkingTitle;
   const label = title ? 'Thinking · ' + title : 'Thinking';
-  if (header.dataset.thinkingTitle === label) return;
-  header.dataset.thinkingTitle = label;
+  if (header.dataset.thinkingLabel === label) return;
+  header.dataset.thinkingLabel = label;
   const icon = header.querySelector('.activity-icon');
   Array.from(header.childNodes).forEach(node => {
     if (node !== icon) node.remove();
