@@ -8,8 +8,10 @@ const emptyState = document.getElementById('emptyState');
 const contextIndicator = document.getElementById('contextIndicator');
 const contextFill = document.getElementById('contextFill');
 const contextPct = document.getElementById('contextPct');
+const sessionListEl = document.getElementById('sessionList');
+const sessionSearchEl = document.getElementById('sessionSearch');
 
-const sessionId = localStorage.getItem('localAgentSessionId') || crypto.randomUUID();
+let sessionId = localStorage.getItem('localAgentSessionId') || crypto.randomUUID();
 localStorage.setItem('localAgentSessionId', sessionId);
 
 let busy = false;
@@ -88,6 +90,10 @@ function addActivity(kind, title, body = '', parent = messagesEl) {
   content.className = `activity-card-body${isMarkdown ? ' markdown' : ''}`;
   if (isMarkdown) {
     content.innerHTML = marked.parse(body);
+    // Cache the text on the element so the expand handler (which re-renders
+    // from _reasoningText) shows the right content. The live flow sets this in
+    // renderReasoningCard; history cards must set it too.
+    content._reasoningText = body;
   } else {
     content.textContent = body;
   }
@@ -145,6 +151,233 @@ function resetContextIndicator() {
   contextFill.style.width = '0%';
   contextIndicator.classList.remove('caution', 'warning', 'danger');
   contextIndicator.title = 'Context: 0 tokens';
+}
+
+// ---------------------------------------------------------------------------
+// Session management
+// ---------------------------------------------------------------------------
+
+let searchDebounce = null;
+let sessionsLoading = false;
+
+function formatSessionDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const isYesterday = d.getTime() === new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime();
+  if (isToday) return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  if (isYesterday) return 'Yesterday';
+  return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+}
+
+function formatTokens(n) {
+  if (n == null) return '';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+async function fetchSessions(query = '') {
+  try {
+    const url = query
+      ? `/api/sessions/search?q=${encodeURIComponent(query)}`
+      : '/api/sessions';
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const data = await r.json();
+    return data.sessions || [];
+  } catch {
+    return null;
+  }
+}
+
+function renderSessionList(sessions) {
+  sessionListEl.innerHTML = '';
+  if (!sessions.length) {
+    const empty = document.createElement('div');
+    empty.className = 'session-list-empty';
+    empty.textContent = 'No sessions found.';
+    sessionListEl.appendChild(empty);
+    return;
+  }
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = `session-item${s.session_id === sessionId ? ' active' : ''}`;
+    item.setAttribute('role', 'option');
+    item.dataset.sessionId = s.session_id;
+
+    const title = document.createElement('div');
+    title.className = 'session-title';
+    title.textContent = s.title || 'New Chat';
+
+    const meta = document.createElement('div');
+    meta.className = 'session-meta';
+    const date = formatSessionDate(s.updated_at || s.created_at);
+    if (date) {
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'session-date';
+      dateSpan.textContent = date;
+      meta.appendChild(dateSpan);
+    }
+    if (s.tokens_total) {
+      const tokSpan = document.createElement('span');
+      tokSpan.className = 'session-tokens';
+      tokSpan.textContent = `${formatTokens(s.tokens_total)} tok`;
+      meta.appendChild(tokSpan);
+    }
+
+    item.append(title, meta);
+    item.addEventListener('click', () => {
+      switchSession(s.session_id);
+      // Close the sidebar on mobile after selecting
+      if (window.matchMedia('(max-width: 920px)').matches) setSidebarOpen(false);
+    });
+    sessionListEl.appendChild(item);
+  }
+}
+
+async function refreshSessionList(query = '') {
+  const sessions = await fetchSessions(query);
+  if (sessions) renderSessionList(sessions);
+}
+
+// Parse the JSON arguments string from a stored tool_call into an object.
+// Falls back to an empty object if parsing fails.
+function parseToolArgs(json) {
+  if (!json) return {};
+  if (typeof json === 'object') return json;
+  try {
+    const parsed = JSON.parse(json);
+    return typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function renderHistoryMessages(msgs) {
+  // Clear existing messages
+  messagesEl.innerHTML = '';
+  if (!msgs.length) {
+    emptyState.style.display = '';
+    return;
+  }
+
+  // Track tool calls whose results haven't been attached yet. In the stored
+  // structure, an assistant message with tool_calls is followed by tool
+  // messages carrying the results, in order.
+  let pendingToolResults = [];
+
+  for (const m of msgs) {
+    const role = m.role;
+    if (role === 'system') continue;
+
+    if (role === 'user') {
+      const content = m.content || '';
+      if (content.trim()) {
+        addMessage('user', content);
+      }
+      continue;
+    }
+
+    if (role === 'tool') {
+      // Attach the result to the most recent pending tool call's group.
+      const result = m.content || '';
+      const entry = pendingToolResults.shift();
+      if (entry) {
+        addActivity('result', `Tool result · ${entry.name}`, result, entry.group.body);
+        entry.group.countEl.textContent = `×${entry.group.n}`;
+        entry.group.n += 1;
+      }
+      continue;
+    }
+
+    if (role === 'assistant') {
+      const content = m.content || '';
+      const reasoning = m.reasoning_content || '';
+      const toolCalls = m.tool_calls || [];
+
+      // Start a fresh tool group for this message
+      breakToolGroup();
+      pendingToolResults = [];
+
+      // Reasoning card. The duration is computed from the stored `time`
+      // section (OpenCode's `created`/`streamed`/`completed`). Prefer
+      // `streamed - created` (pure generation time); fall back to
+      // `completed - created` for older messages without `streamed`.
+      // Messages with no timing at all show the bare "Thought" label.
+      if (reasoning.trim()) {
+        const reasoningCard = addActivity('reasoning', 'Thought', reasoning);
+        const time = m.time;
+        if (time && time.created != null) {
+          const end = time.streamed != null ? time.streamed : time.completed;
+          if (end != null) {
+            setThoughtTitle(reasoningCard.header, end - time.created);
+          }
+        }
+      }
+
+      // Tool calls
+      for (const tc of toolCalls) {
+        const name = tc.function?.name || 'tool';
+        const args = parseToolArgs(tc.function?.arguments);
+        const group = ensureToolGroup(name);
+        addActivity('tool', `Tool request · ${name}`, formatToolArgs(name, args), group.body);
+        group.countEl.textContent = `×${group.n}`;
+        group.n += 1;
+        pendingToolResults.push({ group, name });
+      }
+
+      // Final content
+      if (content.trim()) {
+        const body = addMessage('assistant', content);
+        renderMarkdownInto(body, content, true);
+      }
+    }
+  }
+  scrollMessages(true);
+}
+
+async function switchSession(targetId) {
+  if (targetId === sessionId) return;
+  sessionId = targetId;
+  localStorage.setItem('localAgentSessionId', sessionId);
+  // Clear and load history
+  messagesEl.innerHTML = '';
+  emptyState.style.display = 'none';
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+    if (!r.ok) throw new Error('failed');
+    const data = await r.json();
+    renderHistoryMessages(data.messages || []);
+  } catch {
+    emptyState.style.display = '';
+  }
+  // Update active state in sidebar
+  sessionListEl.querySelectorAll('.session-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.sessionId === sessionId);
+  });
+  resetContextIndicator();
+}
+
+async function createNewSession() {
+  try {
+    const r = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({title: 'New Chat'}),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    sessionId = data.session_id;
+    localStorage.setItem('localAgentSessionId', sessionId);
+    // Clear the chat
+    messagesEl.innerHTML = '';
+    emptyState.style.display = '';
+    resetContextIndicator();
+    // Refresh the list to show the new session
+    await refreshSessionList(sessionSearchEl.value.trim());
+  } catch {}
 }
 
 async function checkHealth() {
@@ -243,20 +476,25 @@ function formatDuration(ms) {
   return `${minutes}m ${seconds}s`;
 }
 
-function finalizeReasoningCard(reasoningCard, reasoningStartTime) {
-  if (!reasoningCard || !reasoningStartTime) return;
-  const elapsed = Date.now() - reasoningStartTime;
-  // Replace only the title text, keeping the ⚡ icon intact
-  const icon = reasoningCard.header.querySelector('.activity-icon');
-  Array.from(reasoningCard.header.childNodes).forEach(node => {
+function setThoughtTitle(header, durationMs) {
+  // Replace only the title text, keeping the ⚡ icon intact. Shows
+  // "Thought · {duration}" with the duration in a muted span.
+  const icon = header.querySelector('.activity-icon');
+  Array.from(header.childNodes).forEach(node => {
     if (node !== icon) node.remove();
   });
   const label = 'Thought · ';
-  reasoningCard.header.appendChild(document.createTextNode(label));
+  header.appendChild(document.createTextNode(label));
   const durSpan = document.createElement('span');
   durSpan.className = 'thought-duration';
-  durSpan.textContent = formatDuration(elapsed);
-  reasoningCard.header.appendChild(durSpan);
+  durSpan.textContent = formatDuration(durationMs);
+  header.appendChild(durSpan);
+}
+
+function finalizeReasoningCard(reasoningCard, reasoningStartTime) {
+  if (!reasoningCard || !reasoningStartTime) return;
+  const elapsed = Date.now() - reasoningStartTime;
+  setThoughtTitle(reasoningCard.header, elapsed);
 }
 
 async function resolveApproval(id, approved, controls) {
@@ -319,47 +557,56 @@ function removeStreamCursor() {
   }
 }
 
+// Performs the synchronous DOM work of rendering markdown `text` into
+// `assistantBody`: parse, wrap code blocks with copy headers, and (for final
+// renders) highlight code. Shared by the live streaming path (throttled via
+// requestAnimationFrame, using the accumulated `rawAssistantText`) and the
+// history path (rendered synchronously from each message's own content).
+function renderMarkdownInto(assistantBody, text, isFinal = false) {
+  const html = marked.parse(text);
+  assistantBody.innerHTML = html;
+  // Re-append stream cursor if it was destroyed by innerHTML
+  if (streamCursor) {
+    assistantBody.appendChild(streamCursor);
+  }
+  // Wrap code blocks with headers
+  assistantBody.querySelectorAll('pre').forEach(pre => {
+    if (pre.parentElement?.classList.contains('code-block')) return;
+    const code = pre.querySelector('code');
+    const langClass = code?.className?.match(/language-(\w+)/)?.[1] || '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'code-block';
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'code-block-header';
+    const langSpan = document.createElement('span');
+    langSpan.className = 'code-lang';
+    langSpan.textContent = langClass || 'text';
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.setAttribute('aria-label', 'Copy code');
+    copyBtn.textContent = 'Copy';
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(code?.textContent || pre.textContent || '');
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    };
+    headerDiv.append(langSpan, copyBtn);
+    pre.parentNode.insertBefore(wrapper, pre);
+    wrapper.append(headerDiv, pre);
+  });
+  // Highlight code only on the final render, not on every frame.
+  if (isFinal) {
+    assistantBody.querySelectorAll('code').forEach(code => {
+      try { hljs.highlightElement(code); } catch {}
+    });
+  }
+}
+
 function renderMarkdown(assistantBody, isFinal = false) {
   if (renderThrottle) return;
   renderThrottle = requestAnimationFrame(() => {
     renderThrottle = null;
-    const html = marked.parse(rawAssistantText);
-    assistantBody.innerHTML = html;
-    // Re-append stream cursor if it was destroyed by innerHTML
-    if (streamCursor) {
-      assistantBody.appendChild(streamCursor);
-    }
-    // Wrap code blocks with headers
-    assistantBody.querySelectorAll('pre').forEach(pre => {
-      if (pre.parentElement?.classList.contains('code-block')) return;
-      const code = pre.querySelector('code');
-      const langClass = code?.className?.match(/language-(\w+)/)?.[1] || '';
-      const wrapper = document.createElement('div');
-      wrapper.className = 'code-block';
-      const headerDiv = document.createElement('div');
-      headerDiv.className = 'code-block-header';
-      const langSpan = document.createElement('span');
-      langSpan.className = 'code-lang';
-      langSpan.textContent = langClass || 'text';
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'copy-btn';
-      copyBtn.setAttribute('aria-label', 'Copy code');
-      copyBtn.textContent = 'Copy';
-      copyBtn.onclick = () => {
-        navigator.clipboard.writeText(code?.textContent || pre.textContent || '');
-        copyBtn.textContent = 'Copied';
-        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-      };
-      headerDiv.append(langSpan, copyBtn);
-      pre.parentNode.insertBefore(wrapper, pre);
-      wrapper.append(headerDiv, pre);
-    });
-    // Highlight code only on the final render, not on every frame.
-    if (isFinal) {
-      assistantBody.querySelectorAll('code').forEach(code => {
-        try { hljs.highlightElement(code); } catch {}
-      });
-    }
+    renderMarkdownInto(assistantBody, rawAssistantText, isFinal);
   });
 }
 
@@ -622,16 +869,8 @@ document.querySelectorAll('.example').forEach(button => {
 
 clearButton.addEventListener('click', async () => {
   if (busy) return;
-  if (!messagesEl.querySelector('.message')) return;
-  if (!confirm('Start a new chat? This clears the conversation and its context.')) return;
-  await fetch('/api/session/clear', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sessionId}),
-  });
-  messagesEl.querySelectorAll('.message, .activity-card').forEach(node => node.remove());
-  if (emptyState) emptyState.style.display = '';
-  resetContextIndicator();
+  if (!confirm('Start a new chat? This keeps the previous conversation in your history.')) return;
+  await createNewSession();
 });
 
 // Pin-aware auto-scroll: stop following the bottom when the user scrolls up
@@ -658,6 +897,39 @@ document.addEventListener('keydown', event => {
     abortController.abort();
   }
 });
+
+// Session list: initial load and search
+refreshSessionList('');
+
+// Load the current session's messages on page load
+(async () => {
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+    if (!r.ok) return;
+    const data = await r.json();
+    renderHistoryMessages(data.messages || []);
+  } catch {}
+})();
+sessionSearchEl.addEventListener('input', () => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    refreshSessionList(sessionSearchEl.value.trim());
+  }, 250);
+});
+
+// Mobile sidebar toggle
+const sidebarToggle = document.getElementById('sidebarToggle');
+const sidebarEl = document.getElementById('sidebar');
+const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+function setSidebarOpen(open) {
+  sidebarEl.classList.toggle('open', open);
+  sidebarBackdrop.classList.toggle('open', open);
+  sidebarToggle.setAttribute('aria-expanded', String(open));
+}
+sidebarToggle.addEventListener('click', () => {
+  setSidebarOpen(!sidebarEl.classList.contains('open'));
+});
+sidebarBackdrop.addEventListener('click', () => setSidebarOpen(false));
 
 checkHealth();
 promptEl.focus();
