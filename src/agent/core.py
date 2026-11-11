@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
@@ -11,8 +12,15 @@ import httpx
 
 from .token_counter import count_message_tokens
 from .tools import ToolError, WorkspaceTools
+from .session.store import SessionStore as PersistentSessionStore
+from .session.usage import UsageTracker
 
 logger = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    """Current time as epoch milliseconds (matches OpenCode's DateTimeUtcFromMillis)."""
+    return int(time.time() * 1000)
 
 
 def _result_meta(name: str, result: str) -> dict[str, Any]:
@@ -88,22 +96,78 @@ class ApprovalManager:
 
 
 class SessionStore:
-    def __init__(self) -> None:
-        self._sessions: dict[str, list[dict[str, Any]]] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+    """Async session store backed by a persistent SQLite database.
 
-    def messages(self, session_id: str) -> list[dict[str, Any]]:
-        return self._sessions.setdefault(
-            session_id,
-            [{"role": "system", "content": SYSTEM_PROMPT}],
-        )
+    Keeps asyncio locks in memory (per-process) and delegates all
+    message and metadata storage to the persistent store.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._store = PersistentSessionStore(db_path)
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def lock(self, session_id: str) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
 
+    def messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the message list for a session, seeding a system prompt.
+
+        The first call for a session creates the session row and seeds
+        the system prompt. Subsequent calls read from the database.
+        """
+        if not self._store.get_session(session_id):
+            self._store.create_session(session_id)
+        msgs = self._store.get_messages(session_id)
+        if not msgs:
+            self._store.append_message(session_id, "system", SYSTEM_PROMPT)
+            msgs = self._store.get_messages(session_id)
+        return msgs
+
+    def append_message(self, session_id: str, role: str, content: Any) -> int:
+        """Append a message to the session in the persistent store."""
+        return self._store.append_message(session_id, role, content)
+
+    def update_message_content(self, session_id: str, seq: int, content: Any) -> None:
+        """Update the content of an existing message by its sequence number."""
+        self._store.update_message_content(session_id, seq, content)
+
     def clear(self, session_id: str) -> None:
-        self._sessions.pop(session_id, None)
+        self._store.delete_session(session_id)
         self._locks.pop(session_id, None)
+
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        self._store.close()
+
+    # ------------------------------------------------------------------
+    # Proxy methods for session management endpoints
+    # ------------------------------------------------------------------
+
+    def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list:
+        return self._store.list_sessions(limit=limit, offset=offset)
+
+    def get(self, session_id: str):
+        return self._store.get_session(session_id)
+
+    def create(self, session_id: str, title: str = "New Chat"):
+        return self._store.create_session(session_id, title=title)
+
+    def search(self, query: str, limit: int = 50) -> list:
+        return self._store.search_sessions(query, limit=limit)
+
+    def update_title(self, session_id: str, title: str) -> None:
+        self._store.update_title(session_id, title)
+
+    def delete(self, session_id: str) -> None:
+        self._store.delete_session(session_id)
+        self._locks.pop(session_id, None)
+
+    def get_messages(self, session_id: str) -> list[dict[str, Any]]:
+        return self._store.get_messages(session_id)
 
 
 class LocalAgent:
@@ -133,6 +197,7 @@ class LocalAgent:
         self.max_agent_steps = max_agent_steps
         self.max_context_tokens = max_context_tokens
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+        self._usage = UsageTracker()
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -153,17 +218,52 @@ class LocalAgent:
         async with self.sessions.lock(session_id):
             messages = self.sessions.messages(session_id)
             messages.append({"role": "user", "content": user_text})
+            self.sessions.append_message(session_id, "user", user_text)
+
+            tracker = UsageTracker()
 
             for step in range(self.max_agent_steps):
                 yield {"type": "status", "text": f"Model turn {step + 1}"}
+                prompt_tokens = count_message_tokens(messages)
+                created = _now_ms()
                 assistant_message, stream_events = await self._model_turn(messages)
                 async for event in stream_events:
                     yield event
-
+                # Per-activity timing (mirrors OpenCode's `time` section).
+                #   ``created``  — when this model turn started.
+                #   ``streamed`` — when the provider response finished streaming,
+                #     before any tool for this turn executed.
+                #   ``completed`` — stamped below once the turn's tool calls have
+                #     run (settled). The history UI uses ``streamed - created``
+                #     for the thought duration.
+                streamed = _now_ms()
+                assistant_message["time"] = {
+                    "created": created,
+                    "streamed": streamed,
+                }
+                # Per-tool timing: each tool call's ``created`` is when the model
+                # emitted it (end of streaming); ``ran``/``completed`` are stamped
+                # in the loop below as the tool executes.
+                for call in assistant_message.get("tool_calls") or []:
+                    call["time"] = {"created": streamed}
                 messages.append(assistant_message)
+                completion_tokens = count_message_tokens([assistant_message])
+                tracker.record_tokens(prompt_tokens, completion_tokens)
+                assistant_seq = self.sessions.append_message(
+                    session_id,
+                    "assistant",
+                    assistant_message,
+                )
+
                 tool_calls = assistant_message.get("tool_calls") or []
                 if not tool_calls:
+                    # No tools to run: the turn is complete at the end of streaming.
+                    assistant_message["time"]["completed"] = _now_ms()
+                    self.sessions.update_message_content(
+                        session_id, assistant_seq, assistant_message
+                    )
                     yield {"type": "context", **self._context_usage(messages)}
+                    self._flush_usage(tracker, session_id)
                     yield {"type": "done"}
                     return
 
@@ -172,6 +272,7 @@ class LocalAgent:
                     name = function.get("name", "")
                     raw_args = function.get("arguments", "{}")
                     call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
+                    call_time = call.get("time")
 
                     try:
                         args = json.loads(raw_args or "{}")
@@ -192,6 +293,7 @@ class LocalAgent:
                             "tool_call_id": call_id,
                             "content": result,
                         })
+                        call_time["completed"] = _now_ms()
                         continue
 
                     yield {"type": "tool_call", "name": name, "arguments": args}
@@ -220,14 +322,19 @@ class LocalAgent:
                                 "tool_call_id": call_id,
                                 "content": result,
                             })
+                            call_time["completed"] = _now_ms()
                             continue
 
+                    call_time["ran"] = _now_ms()
                     try:
                         result = self.tools.execute(name, args)
                         ok = True
                     except ToolError as exc:
                         result = f"Tool error: {exc}"
                         ok = False
+                    call_time["completed"] = _now_ms()
+
+                    tracker.record_tool(name)
 
                     yield {
                         "type": "tool_result",
@@ -237,18 +344,37 @@ class LocalAgent:
                         "result": result,
                         "meta": _result_meta(name, result),
                     }
-                    messages.append({
+                    tool_msg = {
                         "role": "tool",
                         "tool_call_id": call_id,
                         "content": result,
-                    })
+                    }
+                    messages.append(tool_msg)
+                    self.sessions.append_message(
+                        session_id,
+                        "tool",
+                        result,
+                    )
+
+                # Stamp the turn's completion once all of its tool calls have
+                # settled, then persist the updated timing.
+                assistant_message["time"]["completed"] = _now_ms()
+                self.sessions.update_message_content(
+                    session_id, assistant_seq, assistant_message
+                )
 
                 yield {"type": "context", **self._context_usage(messages)}
+
+            self._flush_usage(tracker, session_id)
 
             yield {
                 "type": "error",
                 "message": f"Agent stopped after {self.max_agent_steps} model/tool iterations.",
             }
+
+    def _flush_usage(self, tracker: UsageTracker, session_id: str) -> None:
+        """Flush accumulated usage to the persistent store."""
+        tracker.flush(self.sessions._store, session_id)
 
     async def _model_turn(
         self, messages: list[dict[str, Any]]

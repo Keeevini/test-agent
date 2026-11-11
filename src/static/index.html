@@ -21,6 +21,7 @@
         <p>Private llama.cpp assistant · sandboxed workspace</p>
       </div>
       <div class="topbar-actions">
+        <button id="sidebarToggle" class="ghost-button sidebar-toggle" aria-label="Toggle session list" aria-expanded="false">☰</button>
         <div class="context-indicator" id="contextIndicator" title="Context usage">
           <span class="context-label">Context</span>
           <div class="context-bar">
@@ -34,6 +35,15 @@
     </header>
 
     <main class="layout">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <input type="search" id="sessionSearch" class="session-search" placeholder="Search sessions…" aria-label="Search sessions" autocomplete="off" />
+        </div>
+        <div id="sessionList" class="session-list" role="listbox" aria-label="Sessions">
+          <div class="session-list-empty" id="sessionListEmpty">No sessions yet.</div>
+        </div>
+      </aside>
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
       <section class="chat-panel">
         <div id="messages" class="messages" aria-live="polite">
           <div class="empty-state" id="emptyState">
