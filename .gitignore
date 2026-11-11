@@ -14,6 +14,7 @@ venv/
 .env
 .env.*
 !.env.example
+opencode.json
 
 # Per-machine config (local/) and the personal vault (vault/) are each ignored by
 # their own nested .gitignore, which keeps local/.gitignore + local/.env.example and
