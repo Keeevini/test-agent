@@ -1,7 +1,5 @@
 # CPU-only agent/UI image. Keep llama.cpp + Qwen on the host.
-# Base image is customizable via the BASE_IMAGE build arg (see compose.yaml).
-ARG BASE_IMAGE:python:3.12-slim
-FROM ${BASE_IMAGE}
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
