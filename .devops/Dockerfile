@@ -19,7 +19,7 @@ COPY . /app
 
 # Drop privileges for execution.
 RUN useradd --create-home --uid 10001 agent && \
-    mkdir -p /app/vault && \
+    mkdir -p /app/vault /app/local/sessions && \
     chown -R agent:agent /app
 USER agent
 
