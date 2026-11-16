@@ -3,8 +3,6 @@ services:
     build:
       context: ..
       dockerfile: .devops/Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-python:3.12-slim}
     container_name: ${CONTAINER_NAME:-local-agent-ui}
     init: true
     restart: unless-stopped
