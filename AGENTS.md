@@ -12,12 +12,19 @@ the app from the host filesystem — running bare Python bypasses these security
 
 ```powershell
 cd .devops
-docker compose -f compose.yaml up --build
+docker compose -f compose.yaml --env-file ../local/docker.env up --build
 ```
 
 - Entry point is `src.app` (module) → `app` object in `src/app.py`. There is no `app/` package.
 - Requires a running `llama-server` at `http://127.0.0.1:8080` (see README for llama.cpp flags).
 - The container is reachable at `http://127.0.0.1:8000`.
+
+### Customizing
+
+Container name, host port, base image, and LLM URL live in `local/docker.env` (copy
+`local/docker.env.example` to get started). Compose reads it via the `--env-file` flag
+above. Every variable has a default in `compose.yaml`, so `docker compose -f compose.yaml
+up --build` (no env file) still works out of the box.
 
 ### Stopping
 
@@ -35,6 +42,9 @@ docker compose -f compose.yaml down
 
 Per-machine values belong in `local/.env` (see `local/.env.example`). `src/app.py` also accepts
 `LLM_API_URL` as a fallback for `LLAMA_BASE_URL` (Docker Compose sets `LLM_API_URL`).
+
+Docker-level values (container name, host port, base image, LLM URL) belong in
+`local/docker.env` (see `local/docker.env.example`), read by `compose.yaml` via `--env-file`.
 
 ## Layout
 
