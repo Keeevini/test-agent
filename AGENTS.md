@@ -41,10 +41,12 @@ Per-machine values belong in `local/.env` (see `local/.env.example`). `src/app.p
 - `src/app.py` — FastAPI app; SSE endpoints `/api/chat`, `/api/approval`, `/api/session/clear`,
   `/api/health`; serves `src/static/`.
 - `src/agent/` — the agent package. See `agent/AGENTS.md` for the internals.
-  - `src/agent/core.py` — agent loop, in-RAM session store, approval manager.
+  - `src/agent/core.py` — the agent loop (`LocalAgent`); each concern lives in its own module
+    (`prompt.py`, `approvals.py`, `model.py`, `session_store.py`).
   - `src/agent/tools/filesystem.py` — the only filesystem layer: named tools hard-sandboxed to
     `vault/`; mutating tools require browser approval.
   - `src/agent/token_counter.py` — heuristic token budget (chars ÷ 4).
+  - `src/agent/session/` — the persistent SQLite session store (schema, models, DML, usage).
 - `src/static/` — plain HTML/JS/CSS UI.
 - `vault/` — the only tree the model can touch (personal data; git-ignored).
 - `local/` — per-machine config/secrets (git-ignored).
