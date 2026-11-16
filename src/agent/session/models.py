@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _utcnow() -> str:
+    """Return the current UTC time as an ISO-8601 string (SQLite-compatible)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass
