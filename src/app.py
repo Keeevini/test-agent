@@ -30,11 +30,29 @@ LLAMA_BASE_URL = (
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "local")
 MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "16384"))
 
-DB_PATH = WORKSPACE / "sessions.db"
+# Session history is project-owned state: only this app reads and writes it,
+# never the model, so it lives in the per-machine ``local/`` tree rather than
+# the model-facing ``vault/`` (which the agent's tools can touch).
+LOCAL_DIR = BASE_DIR / "local"
+SESSIONS_DIR = (LOCAL_DIR / "sessions").resolve()
+DB_PATH = SESSIONS_DIR / "sessions.db"
+
+
+def resolve_session_db() -> Path:
+    """Return the sessions database path, creating the store if it is missing.
+
+    A database that already exists in ``local/sessions`` is used as-is. When
+    none is present the folder is created here and the persistent store
+    initialises the database file and schema on first connect.
+    """
+    if not DB_PATH.exists():
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    return DB_PATH
+
 
 workspace_tools = WorkspaceTools(WORKSPACE)
 approvals = ApprovalManager()
-sessions = SessionStore(str(DB_PATH))
+sessions = SessionStore(str(resolve_session_db()))
 agent = LocalAgent(
     LLAMA_BASE_URL,
     LLAMA_MODEL,

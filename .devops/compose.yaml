@@ -16,6 +16,11 @@ services:
       - type: bind
         source: ../vault
         target: /app/vault
+      # The sessions database is project-owned state (only the app touches it),
+      # so it lives in the per-machine local/ tree, not the model-facing vault.
+      - type: bind
+        source: ../local/sessions
+        target: /app/local/sessions
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777
