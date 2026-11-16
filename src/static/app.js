@@ -11,6 +11,11 @@ const contextPct = document.getElementById('contextPct');
 const sessionListEl = document.getElementById('sessionList');
 const sessionSearchEl = document.getElementById('sessionSearch');
 
+// Trash glyph used by the per-session delete button (stroke = currentColor,
+// so it picks up the button's text colour on hover).
+const TRASH_ICON =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
 let sessionId = localStorage.getItem('localAgentSessionId') || crypto.randomUUID();
 localStorage.setItem('localAgentSessionId', sessionId);
 
@@ -29,6 +34,11 @@ function scrollMessages(force = false) {
 
 function hideEmptyState() {
   if (emptyState) emptyState.style.display = 'none';
+}
+
+function clearMessages() {
+  const toRemove = Array.from(messagesEl.children).filter(el => el !== emptyState);
+  toRemove.forEach(el => el.remove());
 }
 
 function isAtBottom(el) {
@@ -227,7 +237,17 @@ function renderSessionList(sessions) {
       meta.appendChild(tokSpan);
     }
 
-    item.append(title, meta);
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'session-delete-btn';
+    deleteBtn.setAttribute('aria-label', `Delete ${s.title || 'New Chat'}`);
+    deleteBtn.title = 'Delete session';
+    deleteBtn.innerHTML = TRASH_ICON;
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      requestDeleteSession(s.session_id, s.title || 'New Chat');
+    });
+
+    item.append(title, meta, deleteBtn);
     item.addEventListener('click', () => {
       switchSession(s.session_id);
       // Close the sidebar on mobile after selecting
@@ -257,7 +277,7 @@ function parseToolArgs(json) {
 
 async function renderHistoryMessages(msgs) {
   // Clear existing messages
-  messagesEl.innerHTML = '';
+  clearMessages();
   if (!msgs.length) {
     emptyState.style.display = '';
     return;
@@ -343,7 +363,7 @@ async function switchSession(targetId) {
   sessionId = targetId;
   localStorage.setItem('localAgentSessionId', sessionId);
   // Clear and load history
-  messagesEl.innerHTML = '';
+  clearMessages();
   emptyState.style.display = 'none';
   try {
     const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
@@ -372,12 +392,115 @@ async function createNewSession() {
     sessionId = data.session_id;
     localStorage.setItem('localAgentSessionId', sessionId);
     // Clear the chat
-    messagesEl.innerHTML = '';
+    clearMessages();
     emptyState.style.display = '';
     resetContextIndicator();
     // Refresh the list to show the new session
     await refreshSessionList(sessionSearchEl.value.trim());
   } catch {}
+}
+
+// ---------------------------------------------------------------------------
+// Session deletion
+// ---------------------------------------------------------------------------
+
+async function requestDeleteSession(targetId, title) {
+  const confirmed = await showConfirmDelete(title);
+  if (!confirmed) return;
+  await deleteSession(targetId);
+}
+
+async function deleteSession(targetId) {
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
+    if (!r.ok) {
+      console.warn('Failed to delete session', r.status);
+      return;
+    }
+  } catch (err) {
+    console.warn('Failed to delete session', err);
+    return;
+  }
+  if (targetId === sessionId) {
+    // Deleted the active session: clear the chat and show empty state.
+    sessionId = null;
+    localStorage.removeItem('localAgentSessionId');
+    clearMessages();
+    emptyState.style.display = '';
+    resetContextIndicator();
+  }
+  await refreshSessionList(sessionSearchEl.value.trim());
+}
+
+// ---------------------------------------------------------------------------
+// Confirmation dialog (themed, non-native)
+// ---------------------------------------------------------------------------
+// Returns a Promise that resolves to true when the user confirms and false
+// when they cancel, close via backdrop/Escape, or dismiss.
+function showConfirmDelete(sessionTitle) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'confirm-dialog-title');
+
+    const header = document.createElement('div');
+    header.className = 'confirm-dialog-header';
+    const titleEl = document.createElement('h2');
+    titleEl.id = 'confirm-dialog-title';
+    titleEl.className = 'confirm-dialog-title';
+    titleEl.textContent = 'Delete session?';
+    header.appendChild(titleEl);
+
+    const body = document.createElement('div');
+    body.className = 'confirm-dialog-body';
+    body.textContent =
+      `This permanently removes “${sessionTitle}” and all of its messages. ` +
+      'This cannot be undone.';
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-dialog-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.className = 'confirm-dialog-button cancel';
+    cancelButton.textContent = 'Cancel';
+    const deleteButton = document.createElement('button');
+    deleteButton.className = 'confirm-dialog-button delete';
+    deleteButton.textContent = 'Delete';
+    actions.append(cancelButton, deleteButton);
+
+    dialog.append(header, body, actions);
+    overlay.appendChild(dialog);
+
+    let settled = false;
+    function close(result) {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close(false);
+      }
+    }
+
+    cancelButton.addEventListener('click', () => close(false));
+    deleteButton.addEventListener('click', () => close(true));
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay) close(false);
+    });
+
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    // Focus the safe option so a stray Enter never confirms the delete.
+    cancelButton.focus();
+  });
 }
 
 async function checkHealth() {

@@ -55,10 +55,17 @@ button { cursor: pointer; }
 .session-search::placeholder { color: var(--muted-2); }
 .session-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 .session-list-empty { color: var(--muted-2); font-size: 13px; padding: 12px 10px; text-align: center; }
-.session-item { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
+.session-item { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; }
 .session-item:hover { background: var(--panel-2); }
 .session-item.active { background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
-.session-title { font-size: 13px; font-weight: 530; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-title { font-size: 13px; font-weight: 530; color: var(--text); padding-right: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Per-session delete button (absolutely positioned top-right of the item) */
+.session-delete-btn { position: absolute; top: 9px; right: 8px; display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted-2); opacity: 0; transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease; }
+.session-item:hover .session-delete-btn, .session-item:focus-within .session-delete-btn, .session-delete-btn:focus-visible { opacity: 1; }
+.session-delete-btn:hover { color: var(--bad); background: var(--panel-2); }
+@media (hover: none) {
+  .session-delete-btn { opacity: 1; }
+}
 .session-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-2); }
 .session-date, .session-tokens { white-space: nowrap; }
 .messages { flex: 1; min-height: 0; overflow-y: auto; padding: 32px max(26px, calc((100% - 860px)/2)); }
@@ -232,3 +239,16 @@ button { cursor: pointer; }
   .message.assistant .message-body .code-block pre { background: none; }
   .message-time { opacity: 0.5; }
 }
+/* Confirmation dialog (themed, non-native) */
+.confirm-overlay { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, #000 55%, transparent); animation: fade-in 0.15s ease-out both; }
+.confirm-dialog { width: min(400px, calc(100vw - 40px)); background: var(--panel); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 20px 48px color-mix(in srgb, #000 50%, transparent); animation: dialog-in 0.15s ease-out both; }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.confirm-dialog-header { padding: 18px 20px 0; }
+.confirm-dialog-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-strong); letter-spacing: -0.02em; }
+.confirm-dialog-body { padding: 10px 20px 18px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.confirm-dialog-actions { display: flex; gap: 10px; padding: 0 20px 20px; }
+.confirm-dialog-button { flex: 1; padding: 10px 0; font-size: 13px; font-weight: 530; border-radius: 8px; border: 1px solid var(--border); color: var(--text); background: var(--panel-2); transition: background 0.15s ease, border-color 0.15s ease; }
+.confirm-dialog-button:hover { background: var(--panel-3); border-color: var(--border-strong); }
+.confirm-dialog-button.cancel { color: var(--muted); }
+.confirm-dialog-button.delete { background: color-mix(in srgb, var(--bad) 20%, var(--panel)); color: #ffc1c1; border-color: transparent; }
+.confirm-dialog-button.delete:hover { background: color-mix(in srgb, var(--bad) 30%, var(--panel)); }
