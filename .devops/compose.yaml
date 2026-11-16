@@ -1,9 +1,10 @@
+name: ${PROJECT_NAME:-Local-Agent}
 services:
-  local-agent-ui:
+  web-ui:
     build:
       context: ..
       dockerfile: .devops/Dockerfile
-    container_name: ${CONTAINER_NAME:-local-agent-ui}
+    container_name: ${CONTAINER_NAME:-local-agent-web-ui}
     init: true
     restart: unless-stopped
     ports:
