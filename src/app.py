@@ -167,7 +167,7 @@ async def clear_session(request: SessionRequest):
 
 class CreateSessionRequest(BaseModel):
     session_id: str | None = None
-    title: str = "New Chat"
+    title: str = "Untitled Session"
 
 
 class UpdateSessionRequest(BaseModel):

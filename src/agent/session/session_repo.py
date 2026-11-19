@@ -20,7 +20,7 @@ class SessionsRepository:
     def create_session(
         self,
         session_id: str,
-        title: str = "New Chat",
+        title: str = "Untitled Session",
         model: str | None = None,
     ) -> SessionMeta:
         """Create a new session row. Idempotent — overwrites if it exists."""
