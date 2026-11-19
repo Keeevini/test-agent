@@ -73,7 +73,7 @@ class SessionStore:
     def get(self, session_id: str):
         return self._store.get_session(session_id)
 
-    def create(self, session_id: str, title: str = "New Chat"):
+    def create(self, session_id: str, title: str = "Untitled Session"):
         return self._store.create_session(session_id, title=title)
 
     def search(self, query: str, limit: int = 50) -> list:

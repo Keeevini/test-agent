@@ -16,8 +16,17 @@ const sessionSearchEl = document.getElementById('sessionSearch');
 const TRASH_ICON =
   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
-let sessionId = localStorage.getItem('localAgentSessionId') || crypto.randomUUID();
-localStorage.setItem('localAgentSessionId', sessionId);
+let sessionId = localStorage.getItem('localAgentSessionId');
+// True once we know the current session has a row in the database. A
+// freshly-generated id (no localStorage) has no row yet; a restored id is
+// assumed to exist (the server recreates it on first use if missing).
+let sessionKnown = false;
+if (!sessionId) {
+  sessionId = crypto.randomUUID();
+  localStorage.setItem('localAgentSessionId', sessionId);
+} else {
+  sessionKnown = true;
+}
 
 let busy = false;
 let streamCursor = null;
@@ -170,6 +179,10 @@ function resetContextIndicator() {
 let searchDebounce = null;
 let sessionsLoading = false;
 
+// The default title assigned to untitled sessions (also used by
+// createNewSession and by the server's CreateSessionRequest).
+const UNTITLED_SESSION_TITLE = 'Untitled Session';
+
 function formatSessionDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -202,6 +215,30 @@ async function fetchSessions(query = '') {
   }
 }
 
+// Slowly scroll a session title while the mouse hovers over the row so titles
+// longer than the sidebar become readable. The text lives in an inner span that
+// slides left within the (fixed) .session-title clip box, so it stays inside the
+// card and simply vanishes at the left edge. The distance is measured per
+// element, so titles that already fit are never scrolled. On mouse leave the
+// title snaps back to the start (no reverse scroll).
+const TITLE_SCROLL_SPEED = 25; // px per second
+
+function startTitleScroll(el) {
+  const inner = el.querySelector('span');
+  if (!inner) return;
+  const overflow = inner.scrollWidth - inner.clientWidth;
+  if (overflow <= 0) return;
+  inner.style.transitionDuration = `${(overflow / TITLE_SCROLL_SPEED).toFixed(2)}s`;
+  inner.style.transform = `translateX(-${overflow}px)`;
+}
+
+function stopTitleScroll(el) {
+  const inner = el.querySelector('span');
+  if (!inner) return;
+  inner.style.transitionDuration = '0s';
+  inner.style.transform = '';
+}
+
 function renderSessionList(sessions) {
   sessionListEl.innerHTML = '';
   if (!sessions.length) {
@@ -219,7 +256,13 @@ function renderSessionList(sessions) {
 
     const title = document.createElement('div');
     title.className = 'session-title';
-    title.textContent = s.title || 'New Chat';
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = s.title || 'Untitled Session';
+    title.appendChild(titleSpan);
+    // Listen on the whole item (not just the title strip) so the scroll
+    // triggers wherever the pointer rests on the row, e.g. the meta line.
+    item.addEventListener('mouseenter', () => startTitleScroll(title));
+    item.addEventListener('mouseleave', () => stopTitleScroll(title));
 
     const meta = document.createElement('div');
     meta.className = 'session-meta';
@@ -239,12 +282,12 @@ function renderSessionList(sessions) {
 
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'session-delete-btn';
-    deleteBtn.setAttribute('aria-label', `Delete ${s.title || 'New Chat'}`);
+    deleteBtn.setAttribute('aria-label', `Delete ${s.title || 'Untitled Session'}`);
     deleteBtn.title = 'Delete session';
     deleteBtn.innerHTML = TRASH_ICON;
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      requestDeleteSession(s.session_id, s.title || 'New Chat');
+      requestDeleteSession(s.session_id, s.title || 'Untitled Session');
     });
 
     item.append(title, meta, deleteBtn);
@@ -259,7 +302,57 @@ function renderSessionList(sessions) {
 
 async function refreshSessionList(query = '') {
   const sessions = await fetchSessions(query);
-  if (sessions) renderSessionList(sessions);
+  if (!sessions) return;
+  renderSessionList(sessions);
+  // The server generates a session's title after the turn's stream ends (the
+  // title request runs only once the turn's model request is done), so a
+  // refresh at the end of a turn can land before the title is written to the
+  // database. While the current session is still showing the default title,
+  // keep the list refreshing on a few delayed ticks so the generated title
+  // appears without a page reload.
+  const current = sessions.find(s => s.session_id === sessionId);
+  if (current && current.title === UNTITLED_SESSION_TITLE && !titlePollTimer) {
+    scheduleTitlePolls();
+  }
+}
+
+// Delayed re-fetches of the session list while the current session is still
+// untitled. Title generation is a separate model request that runs only after
+// the turn's own request has finished, so on a local model the title lands a
+// few seconds after the stream ends (the title request itself takes a few
+// seconds). The sidebar re-fetches on a tight early cadence (3s) until the
+// generated title shows up, up to a 2 minute budget.
+let titlePollTimer = null;
+let titlePollsLeft = 0;
+
+function scheduleTitlePolls(polls = 40) {
+  clearTimeout(titlePollTimer);
+  titlePollsLeft = polls;
+  titlePollTimer = setTimeout(pollForSessionTitle, 3000);
+}
+
+async function pollForSessionTitle() {
+  if (titlePollsLeft <= 0) {
+    titlePollTimer = null;
+    return;
+  }
+  titlePollsLeft -= 1;
+  if (!sessionKnown) {
+    titlePollTimer = null;
+    return;
+  }
+  const sessions = await fetchSessions(sessionSearchEl.value.trim());
+  if (!sessions) {
+    titlePollTimer = null;
+    return;
+  }
+  renderSessionList(sessions);
+  const current = sessions.find(s => s.session_id === sessionId);
+  if (current && current.title === UNTITLED_SESSION_TITLE && titlePollsLeft > 0) {
+    titlePollTimer = setTimeout(pollForSessionTitle, 3000);
+  } else {
+    titlePollTimer = null;
+  }
 }
 
 // Parse the JSON arguments string from a stored tool_call into an object.
@@ -361,6 +454,7 @@ async function renderHistoryMessages(msgs) {
 async function switchSession(targetId) {
   if (targetId === sessionId) return;
   sessionId = targetId;
+  sessionKnown = true;
   localStorage.setItem('localAgentSessionId', sessionId);
   // Clear and load history
   clearMessages();
@@ -385,11 +479,12 @@ async function createNewSession() {
     const r = await fetch('/api/sessions', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({title: 'New Chat'}),
+      body: JSON.stringify({title: 'Untitled Session'}),
     });
     if (!r.ok) return;
     const data = await r.json();
     sessionId = data.session_id;
+    sessionKnown = true;
     localStorage.setItem('localAgentSessionId', sessionId);
     // Clear the chat
     clearMessages();
@@ -398,6 +493,28 @@ async function createNewSession() {
     // Refresh the list to show the new session
     await refreshSessionList(sessionSearchEl.value.trim());
   } catch {}
+}
+
+// Make sure the current session has a row in the database and a valid id.
+// Called before sending a message so the session appears in the sidebar
+// immediately (not after the turn) and the request carries a valid
+// session_id. A restored id is assumed to exist; a freshly-generated id (or a
+// null id after deleting the active session) is created here.
+async function ensureSession() {
+  if (sessionKnown) return sessionId;
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    localStorage.setItem('localAgentSessionId', sessionId);
+  }
+  try {
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sessionId, title: 'Untitled Session'}),
+    });
+  } catch {}
+  sessionKnown = true;
+  return sessionId;
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +541,7 @@ async function deleteSession(targetId) {
   if (targetId === sessionId) {
     // Deleted the active session: clear the chat and show empty state.
     sessionId = null;
+    sessionKnown = false;
     localStorage.removeItem('localAgentSessionId');
     clearMessages();
     emptyState.style.display = '';
@@ -811,6 +929,15 @@ function renderReasoningCard(content, text) {
 
 async function sendMessage(text) {
   if (busy || !text.trim()) return;
+  // Make sure the current session exists in the database and has a valid id.
+  // The first message from the new-chat screen (or after deleting the active
+  // session) must create the session row first so it appears in the sidebar
+  // immediately and the request carries a valid session_id.
+  const sessionJustCreated = !sessionKnown;
+  await ensureSession();
+  if (sessionJustCreated) {
+    refreshSessionList(sessionSearchEl.value.trim());
+  }
   addMessage('user', text.trim());
   rawAssistantText = '';
   let assistantBody = null;
@@ -956,6 +1083,10 @@ async function sendMessage(text) {
     }
     setBusy(false);
     abortController = null;
+    // Refresh the sidebar so a brand-new session (created server-side by the
+    // first message) appears in the list, and so the session's title / token
+    // count stay current after each turn.
+    refreshSessionList(sessionSearchEl.value.trim());
   }
 }
 

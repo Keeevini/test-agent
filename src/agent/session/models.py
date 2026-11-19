@@ -18,7 +18,7 @@ class SessionMeta:
     """Metadata for a single session, mirroring the sessions table row."""
 
     session_id: str
-    title: str = "New Chat"
+    title: str = "Untitled Session"
     model: str | None = None
     created_at: str = ""
     updated_at: str = ""
@@ -38,7 +38,7 @@ class SessionMeta:
             tools = []
         return cls(
             session_id=row["session_id"],
-            title=row.get("title", "New Chat"),
+            title=row.get("title", "Untitled Session"),
             model=row.get("model"),
             created_at=row.get("created_at", ""),
             updated_at=row.get("updated_at", ""),

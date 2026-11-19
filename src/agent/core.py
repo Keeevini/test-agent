@@ -13,6 +13,7 @@ conversation. The individual concerns live in their own modules:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -22,6 +23,7 @@ from .approvals import ApprovalManager
 from .model import ModelClient
 from .session_store import SessionStore
 from .session.usage import UsageTracker
+from .title import SessionTitleGenerator
 from .token_counter import count_message_tokens
 from .tools import ToolError, WorkspaceTools
 
@@ -67,6 +69,15 @@ class LocalAgent:
         self.max_agent_steps = max_agent_steps
         self.max_context_tokens = max_context_tokens
         self.model_client = ModelClient(llama_base_url, model, tools)
+        self._title = SessionTitleGenerator(self.model_client)
+        # Sessions for which a title has been scheduled (or generated).
+        # Guards the "only once" requirement: a title is generated at most
+        # once per session while it is untitled.
+        self._titled: set[str] = set()
+        # Retain a reference to each in-flight title task so the event loop
+        # does not garbage-collect it mid-run (the loop only keeps weak
+        # references to tasks).
+        self._title_tasks: set[asyncio.Task] = set()
 
     async def close(self) -> None:
         await self.model_client.close()
@@ -116,6 +127,15 @@ class LocalAgent:
                 for call in assistant_message.get("tool_calls") or []:
                     call["time"] = {"created": streamed}
                 messages.append(assistant_message)
+                # Schedule a one-shot, non-blocking title for this session now
+                # that the first model turn has finished streaming. Scheduling
+                # it *after* the turn (rather than concurrently) means the
+                # title's request is sent only once the main model request has
+                # finished, so the two never compete for the single
+                # llama-server and the turn is never delayed. The task is not
+                # awaited here, so it never blocks the turn. The ``_titled``
+                # guard makes later iterations no-ops.
+                self._schedule_title(session_id, messages)
                 completion_tokens = count_message_tokens([assistant_message])
                 tracker.record_tokens(prompt_tokens, completion_tokens)
                 assistant_seq = self.sessions.append_message(
@@ -240,6 +260,42 @@ class LocalAgent:
                 "type": "error",
                 "message": f"Agent stopped after {self.max_agent_steps} model/tool iterations.",
             }
+
+    def _schedule_title(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        """Schedule a one-shot, non-blocking title generation for a session.
+
+        Called after the first model turn has finished streaming, so the
+        title's request is sent only once the main model request is done and
+        the two never compete for the single llama-server. The title is
+        generated at most once per session while it is untitled ("only once"):
+        the first call for a session wins, subsequent calls are no-ops. The
+        task is retained in ``self._title_tasks`` so the event loop does not
+        garbage-collect it mid-run.
+        """
+        if session_id in self._titled:
+            return
+        self._titled.add(session_id)
+        task = asyncio.create_task(self._generate_title(session_id, messages))
+        self._title_tasks.add(task)
+        # Drop the reference once the task settles so the set does not grow
+        # without bound for long-lived agent processes.
+        task.add_done_callback(self._title_tasks.discard)
+
+    async def _generate_title(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        """Generate a title for ``session_id`` and persist it.
+
+        Runs on the event loop (never awaited in the turn path), so it is
+        scheduled after the first model turn and never delays the model.
+        Failures are swallowed: title generation is best-effort and must never
+        surface as an error to the turn. The title is written via the store's
+        ``update_title`` path.
+        """
+        try:
+            title = await self._title.generate(messages)
+        except Exception:
+            title = None
+        if title:
+            self.sessions.update_title(session_id, title)
 
     def _flush_usage(self, tracker: UsageTracker, session_id: str) -> None:
         """Flush accumulated usage to the persistent store."""
