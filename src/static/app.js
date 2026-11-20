@@ -215,28 +215,39 @@ async function fetchSessions(query = '') {
   }
 }
 
-// Slowly scroll a session title while the mouse hovers over the row so titles
-// longer than the sidebar become readable. The text lives in an inner span that
-// slides left within the (fixed) .session-title clip box, so it stays inside the
-// card and simply vanishes at the left edge. The distance is measured per
-// element, so titles that already fit are never scrolled. On mouse leave the
-// title snaps back to the start (no reverse scroll).
-const TITLE_SCROLL_SPEED = 25; // px per second
+// Slowly reveal overflowing sidebar titles while a session row is hovered.
+// Hover is an explicit interaction, so this runs even when reduced motion is set.
+const TITLE_SCROLL_SPEED = 75; // pixels per second; visible but still slow
 
-function startTitleScroll(el) {
-  const inner = el.querySelector('span');
+function startTitleScroll(titleEl) {
+  const inner = titleEl.querySelector('span');
   if (!inner) return;
+
+  // Hover is an explicit interaction: animate even when reduced motion is set.
+  // WAAPI does not rely on the CSS transitions disabled by the global media rule.
   const overflow = inner.scrollWidth - inner.clientWidth;
   if (overflow <= 0) return;
-  inner.style.transitionDuration = `${(overflow / TITLE_SCROLL_SPEED).toFixed(2)}s`;
-  inner.style.transform = `translateX(-${overflow}px)`;
+
+  // Restart the title from the beginning when its row is re-entered.
+  inner._titleScrollAnimation?.cancel();
+  inner._titleScrollAnimation = inner.animate(
+    [
+      { transform: 'translateX(0px)' },
+      { transform: `translateX(-${overflow}px)` },
+    ],
+    {
+      duration: (overflow / TITLE_SCROLL_SPEED) * 1000,
+      easing: 'linear',
+      fill: 'forwards',
+    }
+  );
 }
 
-function stopTitleScroll(el) {
-  const inner = el.querySelector('span');
+function stopTitleScroll(titleEl) {
+  const inner = titleEl.querySelector('span');
   if (!inner) return;
-  inner.style.transitionDuration = '0s';
-  inner.style.transform = '';
+  inner._titleScrollAnimation?.cancel();
+  inner._titleScrollAnimation = null;
 }
 
 function renderSessionList(sessions) {
