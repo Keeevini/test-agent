@@ -1,0 +1,38 @@
+/* Mobile: full-width layout, sidebar becomes a slide-in panel */
+@media (max-width: 920px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidebar-toggle { display: inline-block; }
+  .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 280px;
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 24px color-mix(in srgb, #000 50%, transparent);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 25;
+    background: color-mix(in srgb, #000 45%, transparent);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+}
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+/* Print: clean black-on-white chat, hide chrome */
+@media print {
+  html, body { background: #fff; color: #000; height: auto; }
+  body { background: none; }
+  .app-shell { height: auto; }
+  .topbar, .composer, .scroll-to-bottom, .message-copy { display: none !important; }
+  .layout { display: block; }
+  .messages { padding: 0; overflow: visible; max-height: none; }
+  .message.assistant .message-body { max-width: none; }
+  .message.assistant .message-body .code-block pre { background: none; }
+  .message-time { opacity: 0.5; }
+}
