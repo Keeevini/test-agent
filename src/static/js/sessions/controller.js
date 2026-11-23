@@ -24,7 +24,7 @@ export function createSessionsController({ api, root, search, storage, drawer })
   let refreshGeneration = 0;
 
   // Lifecycle hooks wired post-construction to avoid circular imports.
-  const lifecycle = { isBusy: () => false, onActivate: () => {}, onClear: () => {} };
+  let lifecycle = { isBusy: () => false, onActivate: () => {}, onClear: () => {} };
   function setLifecycleHandlers(h) {
     lifecycle = h;
   }
