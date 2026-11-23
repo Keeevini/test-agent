@@ -100,4 +100,9 @@ async def index():
 
 app.include_router(create_health_router(LLAMA_BASE_URL, WORKSPACE, MAX_CONTEXT_TOKENS))
 app.include_router(create_chat_router(agent, approvals))
-app.include_router(create_sessions_router(sessions))
+app.include_router(create_sessions_router(
+    sessions,
+    max_context_tokens=MAX_CONTEXT_TOKENS,
+    model=LLAMA_MODEL,
+    tool_specs=workspace_tools.specs,
+))

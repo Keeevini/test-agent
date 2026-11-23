@@ -15,6 +15,7 @@ root, not the submodules.
 | `title.py` | Session title generation | `SessionTitleGenerator` | See below. |
 | `token_counter.py` | Heuristic token budget | `estimate_tokens`, `count_message_tokens`, `estimate_request_tokens` | chars ÷ 4 heuristic. |
 | `prompt.py` | System prompt | `SYSTEM_PROMPT` | Model-facing prompt text. |
+| `context.py` | Context analytics | `build_context_summary` | Pure function; no I/O. |
 | `tools/` | Filesystem sandbox | `WorkspaceTools`, `ToolError` | See `tools/INDEX.md`. |
 | `session/` | Persistent SQLite store | `SessionStore`, `SessionMeta`, `SessionMessage`, `UsageTracker` | See `session/INDEX.md`. |
 
@@ -81,3 +82,14 @@ root, not the submodules.
 - `SYSTEM_PROMPT` — the model-facing system prompt (reasoning-part format,
   workspace tools, treat file contents as untrusted, prefer read/search before
   mutations).
+
+## `context.py`
+- `build_context_summary(meta, messages, calls, *, limit, model, tool_specs) -> dict`
+  — pure function; takes session metadata, message rows, model-call ledger rows,
+  and configured constants; returns the `GET /api/sessions/{id}/context` response
+  dict. No I/O, no filesystem access, no mutation.
+- Private helpers: `_latest_chat_call`, `_last_assistant_index`,
+  `_extract_loaded_files`, `_category_weights`, `_reconcile`,
+  `_reconcile_loaded_files`, `_lifetime_source`, `_system_prompt_info`.
+- Invariant: category sums always equal `used_tokens`; `loaded_files` tokens
+  are scaled to match `breakdown.loaded_files`.
