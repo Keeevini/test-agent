@@ -102,9 +102,29 @@ class LocalAgent:
 
             tracker = UsageTracker()
 
+            def save_tool_result(call_id, name, result, ok, path=None):
+                """Persist a final tool result to both the in-memory context and DB.
+
+                Every branch (invalid args, denied approval, ToolError, success)
+                funnels through here so the result row always carries its
+                ``tool_call_id`` and ``context_meta`` (name/ok, plus the sandbox-
+                relative ``path`` for a successful ``read_file``). The ``path`` is
+                the already-submitted sandbox-relative argument — no new vault
+                read is performed.
+                """
+                msg = {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": result,
+                    "context_meta": {"name": name, "ok": ok},
+                }
+                if name == "read_file" and ok and isinstance(path, str):
+                    msg["context_meta"]["path"] = path
+                messages.append(msg)
+                self.sessions.append_message(session_id, "tool", msg)
+
             for step in range(self.max_agent_steps):
                 yield {"type": "status", "text": f"Model turn {step + 1}"}
-                prompt_tokens = count_message_tokens(messages)
                 created = _now_ms()
                 assistant_message, stream_events = await self.model_client.stream(messages)
                 async for event in stream_events:
@@ -136,12 +156,20 @@ class LocalAgent:
                 # awaited here, so it never blocks the turn. The ``_titled``
                 # guard makes later iterations no-ops.
                 self._schedule_title(session_id, messages)
-                completion_tokens = count_message_tokens([assistant_message])
-                tracker.record_tokens(prompt_tokens, completion_tokens)
                 assistant_seq = self.sessions.append_message(
                     session_id,
                     "assistant",
                     assistant_message,
+                )
+                # Record this completed model call in the durable ledger
+                # immediately (before any tool step can fail), so lifetime
+                # usage survives crashes and is idempotent per assistant row.
+                self.sessions.record_model_call(
+                    session_id,
+                    f"chat:{assistant_seq}",
+                    "chat",
+                    assistant_seq,
+                    assistant_message["usage"],
                 )
 
                 tool_calls = assistant_message.get("tool_calls") or []
@@ -161,6 +189,9 @@ class LocalAgent:
                     name = function.get("name", "")
                     raw_args = function.get("arguments", "{}")
                     call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
+                    # Stamp the id back onto the persisted assistant call so it
+                    # links to its (possibly generated) result id.
+                    call["id"] = call_id
                     call_time = call.get("time")
 
                     try:
@@ -177,11 +208,7 @@ class LocalAgent:
                             "result": result,
                             "meta": _result_meta(name, result),
                         }
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "content": result,
-                        })
+                        save_tool_result(call_id, name, result, False)
                         call_time["completed"] = _now_ms()
                         continue
 
@@ -206,11 +233,7 @@ class LocalAgent:
                                 "result": result,
                                 "meta": _result_meta(name, result),
                             }
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": call_id,
-                                "content": result,
-                            })
+                            save_tool_result(call_id, name, result, False)
                             call_time["completed"] = _now_ms()
                             continue
 
@@ -233,17 +256,7 @@ class LocalAgent:
                         "result": result,
                         "meta": _result_meta(name, result),
                     }
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": result,
-                    }
-                    messages.append(tool_msg)
-                    self.sessions.append_message(
-                        session_id,
-                        "tool",
-                        result,
-                    )
+                    save_tool_result(call_id, name, result, ok, path=args.get("path"))
 
                 # Stamp the turn's completion once all of its tool calls have
                 # settled, then persist the updated timing.
@@ -291,9 +304,16 @@ class LocalAgent:
         ``update_title`` path.
         """
         try:
-            title = await self._title.generate(messages)
+            title, usage = await self._title.generate(messages)
         except Exception:
-            title = None
+            title, usage = None, None
+        # Record the title model call's usage in the durable ledger even when
+        # the title is empty (a completed model call still spent tokens).
+        # Lifetime-only: does not create a chat row or move the latest-chat marker.
+        if usage:
+            self.sessions.record_model_call(
+                session_id, "title", "title", None, usage
+            )
         if title:
             self.sessions.update_title(session_id, title)
 

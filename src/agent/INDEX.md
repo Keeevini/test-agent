@@ -60,10 +60,12 @@ root, not the submodules.
 - `messages(session_id)` seeds a `SYSTEM_PROMPT` on first use; `append_message`,
   `update_message_content`, `clear`, `close`.
 - Proxies for the endpoints: `list`, `get`, `create`, `search`, `update_title`,
-  `delete`, `get_messages`.
+  `delete`, `get_messages`, `record_model_call`, `list_model_calls`.
 
 ## `title.py` — `SessionTitleGenerator`
-- `SessionTitleGenerator(model_client)`; `generate(messages) -> str | None`;
+- `SessionTitleGenerator(model_client)`;
+  `generate(messages) -> (str | None, dict | None)` — returns a `(title, usage)`
+  pair; `usage` is the provider usage dict (or `None` if no usage was captured).
   `truncate(text, max_length) -> str`.
 - Invariant: callers schedule generation on the event loop and never await it in
   the turn path (non-blocking, only-once per untitled session).

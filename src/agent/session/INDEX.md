@@ -12,7 +12,7 @@ public entry; the repositories and schema are maintained independently.
 | `message_repo.py` | `messages` table CRUD | `MessagesRepository` | See below. |
 | `models.py` | Row dataclasses | `SessionMeta`, `SessionMessage`, `_utcnow` | See below. |
 | `usage.py` | Per-turn usage tracking | `UsageTracker` | See below. |
-| `schema/` | DDL | `apply_schema`, `SCHEMA_VERSION` | See `schema/INDEX.md`. |
+| `schema/` | DDL | `apply_schema`, `SCHEMA_VERSION`, `CREATE_MODEL_CALLS_TABLE` | See `schema/INDEX.md`. |
 
 ## `store.py` — `SessionStore`
 - `SessionStore(db_path)` — opens a thread-safe `sqlite3` connection
@@ -35,10 +35,24 @@ public entry; the repositories and schema are maintained independently.
 - `update_usage(session_id, tokens_in=0, tokens_out=0, cost=0.0, tools_used=None)`
   — additive counters; `tools_used` names are merged (deduplicated).
 - `set_model(session_id, model)`.
+- `record_model_call(session_id, call_key, kind, assistant_seq, usage) -> bool`
+  — inserts one durable ledger row into `model_calls` and increments the
+  lifetime `sessions` counters **only** on a real insert. Idempotent per
+  `(session_id, call_key)` (`INSERT OR IGNORE`); a duplicate returns `False`
+  and never double-counts. A missing session (FK violation) returns `False`
+  and is never recreated. Validates `usage` (`prompt_tokens` /
+  `completion_tokens` are `int >= 0`, `prompt_source` / `completion_source`
+  are `str`) and raises `ValueError` otherwise.
+- `list_model_calls(session_id) -> list[dict]` — ledger rows oldest first,
+  ordered by `recorded_at` then `assistant_seq` (never by same-second
+  timestamps alone). "Latest chat call" is `kind == 'chat'` + max `assistant_seq`.
 
 ## `message_repo.py` — `MessagesRepository`
 - `get_messages(session_id) -> list[dict]` — ordered by `seq`; assistant JSON
-  content is deserialized back to a dict.
+  content is deserialized back to a dict. Tool rows whose stored content parses
+  as a genuine tool object (`role == 'tool'`, `content` str, `tool_call_id`
+  str) are returned with the parsed object; other tool rows fall back to the
+  legacy `{role: 'tool', content: raw}` shape.
 - `append_message(session_id, role, content) -> int` — returns the new `seq`
   (`MAX(seq)+1`); content may be a `str` (user/system) or `dict` (assistant),
   JSON-encoded. Touches the session's `updated_at`.
@@ -50,7 +64,8 @@ public entry; the repositories and schema are maintained independently.
   `created_at`, `updated_at`, `tokens_in/out/total`, `cost`, `tools_used`);
   `from_row(row) -> SessionMeta`.
 - `SessionMessage` — message row dataclass (`session_id`, `seq`, `role`,
-  `content`); `to_dict() -> dict` (assistant content parsed as JSON).
+  `content`); `to_dict() -> dict` — assistant content parsed as JSON; tool rows
+  parsed when the stored JSON is a genuine tool object, else legacy raw text.
 - `_utcnow() -> str` — current UTC time as `YYYY-MM-DD HH:MM:SS` (SQLite-compatible).
 
 ## `usage.py` — `UsageTracker`

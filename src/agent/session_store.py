@@ -88,3 +88,20 @@ class SessionStore:
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         return self._store.get_messages(session_id)
+
+    def record_model_call(
+        self,
+        session_id: str,
+        call_key: str,
+        kind: str,
+        assistant_seq: int | None,
+        usage: dict[str, Any],
+    ) -> bool:
+        """Record one completed model invocation in the durable ledger."""
+        return self._store.record_model_call(
+            session_id, call_key, kind, assistant_seq, usage
+        )
+
+    def list_model_calls(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the session's model-call ledger rows, oldest first."""
+        return self._store.list_model_calls(session_id)

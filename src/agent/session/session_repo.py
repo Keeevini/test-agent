@@ -9,6 +9,7 @@ independently of message storage.
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from .models import SessionMeta, _utcnow
@@ -166,3 +167,99 @@ class SessionsRepository:
                 (model, session_id),
             )
             self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Per-model-call usage ledger
+    # ------------------------------------------------------------------
+
+    def record_model_call(
+        self,
+        session_id: str,
+        call_key: str,
+        kind: str,
+        assistant_seq: int | None,
+        usage: dict[str, Any],
+    ) -> bool:
+        """Record one completed model invocation in the ``model_calls`` ledger.
+
+        Idempotent per ``(session_id, call_key)``: a duplicate key is ignored
+        and the lifetime ``sessions`` counters are incremented **only** when a
+        row is actually inserted, so repeated recordings never double count.
+        A missing session (foreign-key) is a graceful no-op returning ``False``
+        — it never recreates the session.
+
+        ``usage`` is the finalized provider-usage dict from
+        ``ModelClient.stream`` carrying ``prompt_tokens`` / ``completion_tokens``
+        (ints >= 0) and ``prompt_source`` / ``completion_source`` (strings).
+        """
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        prompt_source = usage.get("prompt_source")
+        completion_source = usage.get("completion_source")
+        # Validate before touching the connection.
+        for value in (prompt_tokens, completion_tokens):
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError("usage token counts must be non-negative ints")
+        if not isinstance(prompt_source, str) or not isinstance(completion_source, str):
+            raise ValueError("usage sources must be strings")
+
+        now = _utcnow()
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO model_calls "
+                    "(session_id, call_key, kind, assistant_seq, "
+                    " prompt_tokens, completion_tokens, "
+                    " prompt_source, completion_source, recorded_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        call_key,
+                        kind,
+                        assistant_seq,
+                        prompt_tokens,
+                        completion_tokens,
+                        prompt_source,
+                        completion_source,
+                        now,
+                    ),
+                )
+                inserted = cur.rowcount > 0
+            except sqlite3.IntegrityError:
+                # FK violation: the session no longer exists.
+                inserted = False
+            if inserted:
+                # Increment lifetime counters exactly once, only on insert.
+                self._conn.execute(
+                    "UPDATE sessions SET "
+                    "tokens_in = tokens_in + ?, "
+                    "tokens_out = tokens_out + ?, "
+                    "tokens_total = tokens_total + ?, "
+                    "updated_at = ? "
+                    "WHERE session_id = ?",
+                    (
+                        prompt_tokens,
+                        completion_tokens,
+                        prompt_tokens + completion_tokens,
+                        now,
+                        session_id,
+                    ),
+                )
+            self._conn.commit()
+            return inserted
+
+    def list_model_calls(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the session's ``model_calls`` ledger rows, oldest first.
+
+        Rows are ordered by ``recorded_at`` then ``assistant_seq``. Callers that
+        need "the latest chat call" should select by ``kind == 'chat'`` and the
+        maximum ``assistant_seq`` — never by same-second timestamps.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM model_calls "
+                "WHERE session_id = ? "
+                "ORDER BY recorded_at, assistant_seq",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]

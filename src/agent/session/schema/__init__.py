@@ -5,10 +5,12 @@ maintained independently:
 
 - :mod:`.sessions` — the ``sessions`` table (session-level properties).
 - :mod:`.messages` — the ``messages`` table (conversation content).
+- :mod:`.model_calls` — the ``model_calls`` table (per-model-call usage ledger).
 - :mod:`.indexes`  — index definitions.
 """
 
 from .messages import CREATE_MESSAGES_TABLE
+from .model_calls import CREATE_MODEL_CALLS_TABLE
 from .sessions import CREATE_SESSIONS_TABLE
 from .indexes import CREATE_INDEXES
 
@@ -18,6 +20,7 @@ SCHEMA_VERSION: int = 1
 _MIGRATIONS: list[tuple[int, str]] = [
     (1, CREATE_SESSIONS_TABLE),
     (1, CREATE_MESSAGES_TABLE),
+    (1, CREATE_MODEL_CALLS_TABLE),
 ]
 
 
@@ -34,6 +37,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "CREATE_SESSIONS_TABLE",
     "CREATE_MESSAGES_TABLE",
+    "CREATE_MODEL_CALLS_TABLE",
     "CREATE_INDEXES",
     "apply_schema",
 ]
