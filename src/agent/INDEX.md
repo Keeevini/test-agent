@@ -13,7 +13,7 @@ root, not the submodules.
 | `approvals.py` | Approval gate | `ApprovalManager`, `PendingApproval` | See below. |
 | `session_store.py` | Async store wrapper | `SessionStore` | See below. |
 | `title.py` | Session title generation | `SessionTitleGenerator` | See below. |
-| `token_counter.py` | Heuristic token budget | `estimate_tokens`, `count_message_tokens` | chars ÷ 4 heuristic. |
+| `token_counter.py` | Heuristic token budget | `estimate_tokens`, `count_message_tokens`, `estimate_request_tokens` | chars ÷ 4 heuristic. |
 | `prompt.py` | System prompt | `SYSTEM_PROMPT` | Model-facing prompt text. |
 | `tools/` | Filesystem sandbox | `WorkspaceTools`, `ToolError` | See `tools/INDEX.md`. |
 | `session/` | Persistent SQLite store | `SessionStore`, `SessionMeta`, `SessionMessage`, `UsageTracker` | See `session/INDEX.md`. |
@@ -37,6 +37,13 @@ root, not the submodules.
   / `content_delta` events. The `assistant` dict is populated in the iterator's
   `finally` block (so it is set even on disconnect). Accepts a server origin, an
   `/v1` base, or the full chat endpoint.
+- `stream` requests `stream_options.include_usage` and captures per-field usage
+  into the finalized `assistant["usage"]` = `{prompt_tokens, completion_tokens,
+  prompt_source, completion_source, cached_prompt_tokens, reasoning_tokens}`.
+  Provider counts win per field (`0` is exact zero); a missing count falls back
+  to the app's estimator and is labeled `"estimated"`. Stored-only metadata
+  (`time`/`usage`/`context_meta`, nested tool timing) is stripped from outbound
+  messages. A 400 rejecting `stream_options` is retried once without the field.
 - `close()` — closes the httpx client.
 
 ## `approvals.py` — `ApprovalManager`
@@ -65,6 +72,8 @@ root, not the submodules.
 - `estimate_tokens(text) -> int` (chars ÷ 4, min 1).
 - `count_message_tokens(messages) -> int` (content + reasoning + tool calls +
   per-message overhead).
+- `estimate_request_tokens(messages, tools) -> int` (messages + tool specs;
+  fallback only, used when the provider reports no prompt count).
 
 ## `prompt.py`
 - `SYSTEM_PROMPT` — the model-facing system prompt (reasoning-part format,
