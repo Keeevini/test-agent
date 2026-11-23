@@ -19,9 +19,17 @@ export function createMessagesView({ messagesEl, emptyState, scrollToBottom }) {
     if (emptyState) emptyState.style.display = '';
   }
 
+  // Remove every message and reset scroll state. The caller cancels any
+  // pending Markdown/reasoning frames first, so a stale frame cannot
+  // repopulate a removed node.
   function clear() {
-    const toRemove = Array.from(messagesEl.children).filter(el => el !== emptyState);
-    toRemove.forEach(el => el.remove());
+    removeCursor();
+    Array.from(messagesEl.children)
+      .filter(element => element !== emptyState)
+      .forEach(element => element.remove());
+    isPinned = true;
+    scrollToBottom.hidden = true;
+    messagesEl.scrollTop = 0;
   }
 
   function isAtBottom() {

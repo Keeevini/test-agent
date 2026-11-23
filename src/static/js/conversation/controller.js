@@ -7,7 +7,7 @@
 import { createActivityView } from './activity.js';
 import { createToolGroups, formatToolArgs, formatResult } from './tool-cards.js';
 import { createReasoningRenderer, updateThinkingTitle } from './reasoning.js';
-import { schedule as scheduleMarkdown, flushFinal, renderInto } from './markdown.js';
+import { schedule as scheduleMarkdown, flushFinal, renderInto, cancel as cancelMarkdown } from './markdown.js';
 import { renderHistory } from './history.js';
 import { addApproval } from './approval.js';
 
@@ -30,6 +30,13 @@ export function createConversationController({ api, sessions, messages, status }
     return busy;
   }
 
+  // A turn may start only when nothing is busy and no session transition is
+  // in flight. Kept separate from isBusy() so the Stop path does not fire
+  // during a navigation transition (there is no AbortController to stop).
+  function canSend() {
+    return !busy && !sessions.isTransitioning();
+  }
+
   function onBusyChange(fn) {
     busyListeners.push(fn);
   }
@@ -38,12 +45,33 @@ export function createConversationController({ api, sessions, messages, status }
   // current and their request is still the most recent (stale-response guard).
   let historyGeneration = 0;
 
+  // Cancel pending Markdown/reasoning frames, then clear DOM/cursor/scroll
+  // state and reveal the empty state. Called on every navigation so a stale
+  // transcript never appears under a newly selected session.
+  function clearTranscript() {
+    messages.el.querySelectorAll('.message-body').forEach(cancelMarkdown);
+    messages.el.querySelectorAll('.activity-card.reasoning .activity-card-body')
+      .forEach(reasoning.cancel);
+    messages.clear();
+    messages.showEmpty();
+  }
+
+  function invalidateHistory() {
+    historyGeneration += 1;
+  }
+
+  function showEmpty() {
+    invalidateHistory();
+    clearTranscript();
+  }
+
   async function loadHistory(requestedId) {
     const generation = ++historyGeneration;
-    if (!requestedId) {
-      messages.showEmpty();
-      return;
-    }
+    // Clear immediately: no transcript from A must be visible under B.
+    clearTranscript();
+    status.resetContext();
+    if (!requestedId) return;
+
     try {
       const stored = await api.getSessionMessages(requestedId);
       if (generation !== historyGeneration || requestedId !== sessions.currentId()) return;
@@ -62,20 +90,12 @@ export function createConversationController({ api, sessions, messages, status }
     }
   }
 
-  function invalidateHistory() {
-    historyGeneration += 1;
-  }
-
-  function showEmpty() {
-    messages.showEmpty();
-  }
-
   function stop() {
     if (abortController) abortController.abort();
   }
 
   async function send(text) {
-    if (busy || !text || !text.trim()) return;
+    if (busy || !text || !text.trim() || sessions.isTransitioning()) return;
     const trimmed = text.trim();
     // Set busy synchronously before the first await so a rapid second send
     // cannot start a second turn while ensureSession() is pending (fix (c)).
@@ -217,6 +237,7 @@ export function createConversationController({ api, sessions, messages, status }
     send,
     stop,
     isBusy,
+    canSend,
     loadHistory,
     showEmpty,
     onBusyChange,

@@ -17,7 +17,10 @@ export function initComposer({ composer, promptEl, sendButton, clearButton, conv
       conversation.stop();
       return;
     }
+    // New-chat/delete is in flight. Do not consume the typed draft.
+    if (!conversation.canSend()) return;
     const text = promptEl.value;
+    if (!text.trim()) return;
     promptEl.value = '';
     promptEl.style.height = 'auto';
     conversation.send(text);
