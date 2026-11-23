@@ -22,21 +22,30 @@ group contexts so a live stream and a replay never share state.
 - Owns `busy`, `abortController`, and per-turn `assistantText`/`assistantBody`/
   `reasoningCard` state. Per-turn state is local to a turn, never a shared
   singleton.
-- `send(text)` — guards on `busy`/empty; **sets busy synchronously before the
-  first `await`** (fix (c)) so a rapid second send cannot start a second turn
-  while `ensureSession()` is pending. Calls `sessions.ensureSession()`, then
-  iterates `api.streamChat` and dispatches each event. On completion/abort it
-  finalizes reasoning, removes the cursor, and renders the final Markdown via
-  `flushFinal` (which cancels the pending RAF and renders synchronously —
-  fix (d)). Refreshes the sidebar in `finally`.
+- `send(text)` — guards on `busy`/empty and `sessions.isTransitioning()`;
+  **sets busy synchronously before the first `await`** (fix (c)) so a rapid
+  second send cannot start a second turn while `ensureSession()` is pending.
+  Calls `sessions.ensureSession()`, then iterates `api.streamChat` and
+  dispatches each event. On completion/abort it finalizes reasoning, removes
+  the cursor, and renders the final Markdown via `flushFinal` (which cancels
+  the pending RAF and renders synchronously — fix (d)). Refreshes the sidebar
+  in `finally`.
 - `stop()` — aborts the in-flight `AbortController`.
-- `isBusy()`, `onBusyChange(fn)` — busy state and a single listener registry
-  (used by the composer to mirror state).
-- `loadHistory(requestedId)` — fetches stored messages and replays them.
-  **Stale-response guard:** a generation counter ensures only the most recent
-  request, against the current session, is applied. Builds a fresh tool-group
-  context per replay.
-- `showEmpty()`.
+- `isBusy()` — active-turn state only. `canSend()` — a turn may start only
+  when nothing is busy **and** no session transition is in flight. Kept
+  separate from `isBusy()` so the composer's Stop path does not fire while a
+  create/delete transition is pending (there is no `AbortController` to
+  stop).
+- `onBusyChange(fn)` — busy state and a single listener registry (used by
+  the composer to mirror state).
+- `loadHistory(requestedId)` — **clears the transcript immediately** (cancels
+  pending Markdown/reasoning frames, then `messages.clear()` +
+  `messages.showEmpty()`) and resets the status context, so a transcript from
+  the previous session is never visible under a newly selected one while the
+  fetch is pending. **Stale-response guard:** a generation counter ensures
+  only the most recent request, against the current session, is applied.
+  Builds a fresh tool-group context per replay.
+- `showEmpty()` — invalidates pending history and clears the transcript.
 - `dispatch(event)` handles: `reasoning_delta`, `content_delta`, `context`,
   `tool_call`, `approval_required`, `tool_result`, `error`. A `tool_call` /
   `approval_required` / `tool_result` ends the current assistant message, so
@@ -109,5 +118,5 @@ group contexts so a live stream and a replay never share state.
   helpers constructed from the injected `messages` view.
 - History replay builds fresh tool-group contexts and never reuses a live
   stream's groups.
-- `markdown.js` is the only module that touches the `marked`/`hljs` page
-  globals.
+- The `marked` page global is consumed by `markdown.js`, `activity.js`, and
+  `reasoning.js`; `hljs` is touched only by `markdown.js`.

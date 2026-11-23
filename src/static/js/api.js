@@ -13,7 +13,7 @@ export async function listSessions(query = '') {
     ? `/api/sessions/search?q=${encodeURIComponent(query)}`
     : '/api/sessions';
   const r = await fetch(url);
-  if (!r.ok) return null;
+  if (!r.ok) throw new Error(`Session list failed: HTTP ${r.status}`);
   const data = await r.json();
   return data.sessions || [];
 }

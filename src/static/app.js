@@ -63,8 +63,8 @@ initComposer({
 window.addEventListener('online', () => status.checkHealth());
 window.addEventListener('offline', () => status.showOffline());
 
-// Initial history loading happens exactly once, here.
-await sessions.init();
-await conversation.loadHistory(sessions.currentId());
-await status.checkHealth();
+// The health badge and first history load must not depend on sidebar I/O.
+void status.checkHealth();
+void sessions.init().catch(error => console.warn('Session initialization failed', error));
+void conversation.loadHistory(sessions.currentId());
 byId('prompt').focus();
