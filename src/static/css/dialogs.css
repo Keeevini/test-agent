@@ -1,0 +1,13 @@
+/* Confirmation dialog (themed, non-native) */
+.confirm-overlay { position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, #000 55%, transparent); animation: fade-in 0.15s ease-out both; }
+.confirm-dialog { width: min(400px, calc(100vw - 40px)); background: var(--panel); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 20px 48px color-mix(in srgb, #000 50%, transparent); animation: dialog-in 0.15s ease-out both; }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.confirm-dialog-header { padding: 18px 20px 0; }
+.confirm-dialog-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-strong); letter-spacing: -0.02em; }
+.confirm-dialog-body { padding: 10px 20px 18px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.confirm-dialog-actions { display: flex; gap: 10px; padding: 0 20px 20px; }
+.confirm-dialog-button { flex: 1; padding: 10px 0; font-size: 13px; font-weight: 530; border-radius: 8px; border: 1px solid var(--border); color: var(--text); background: var(--panel-2); transition: background 0.15s ease, border-color 0.15s ease; }
+.confirm-dialog-button:hover { background: var(--panel-3); border-color: var(--border-strong); }
+.confirm-dialog-button.cancel { color: var(--muted); }
+.confirm-dialog-button.delete { background: color-mix(in srgb, var(--bad) 20%, var(--panel)); color: #ffc1c1; border-color: transparent; }
+.confirm-dialog-button.delete:hover { background: color-mix(in srgb, var(--bad) 30%, var(--panel)); }

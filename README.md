@@ -11,24 +11,29 @@ It intentionally avoids LangChain/LlamaIndex/agent frameworks so you can see the
 - OpenAI-style function/tool calls
 - read-only tools execute automatically
 - filesystem mutations pause for explicit browser approval
-- every filesystem path is hard-sandboxed to `./files`
-- conversation/tool history stays in RAM and is not sent to any cloud service by this app
+- every filesystem path is hard-sandboxed to `vault/`
+- model chat is local (no cloud inference), and sessions/messages persist to SQLite under `local/sessions`
+- the page also requests remote presentation assets (Google Fonts, marked, highlight.js) from CDNs
 
 ## Project layout
 
 ```text
-local-agent-ui/
+local-agent/
 ├── src/
-│   ├── app.py            # HTTP/SSE API and app wiring
-│   ├── static/           # browser UI (index.html, app.js, styles.css)
-│   └── agent/            # agent package
-│       ├── core.py       # agent loop + llama-server streaming/tool handling
-│       ├── token_counter.py
+│   ├── app.py            # composition root: lifespan, static mount, router registration
+│   ├── api/              # HTTP route factories (chat, sessions, health)
+│   ├── static/           # browser UI (index.html, app.js, styles.css, js/, css/)
+│   └── agent/            # agent runtime (loop, model, tools, persistent sessions)
+│       ├── core.py       # LocalAgent turn loop
+│       ├── model.py      # llama-server SSE client
+│       ├── approvals.py  # approval gate for mutating tools
+│       ├── session/      # persistent SQLite store
 │       └── tools/
 │           └── filesystem.py   # sandboxed filesystem capabilities
 ├── vault/                # ONLY filesystem tree exposed to the model tools (git-ignored)
-├── local/                # per-machine config/secrets (git-ignored)
+├── local/                # per-machine config/secrets + sessions SQLite (git-ignored)
 ├── .devops/              # Docker Compose + Dockerfile
+├── tests/                # focused regression tests
 ├── requirements.txt
 └── opencode.json
 ```
@@ -58,15 +63,17 @@ If your current llama.cpp build/model template uses a different reasoning mode, 
 
 The app also sends `reasoning_format: deepseek` per chat request. If the selected template does not emit reasoning, the reasoning panel will simply stay empty.
 
-## 2. Install and start the UI
+## 2. Start the UI
+
+Run the UI through Docker Compose. The container is read-only, runs as a
+non-root user, drops all capabilities, and isolates the app from the host
+filesystem, so it is not launched with a bare host `python -m uvicorn`.
 
 From this directory:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m uvicorn src.app:app --host 127.0.0.1 --port 8000
+cd .devops
+docker compose up --build
 ```
 
 Open:
@@ -75,12 +82,12 @@ Open:
 http://127.0.0.1:8000
 ```
 
-If your inference server is somewhere else:
+Container name, host port, and LLM URL live in `.devops/.env` (copy
+`.env.example` to get started). `compose.yaml` reads it automatically and every
+variable has a default, so the command above works out of the box. To stop:
 
 ```powershell
-$env:LLAMA_BASE_URL="http://127.0.0.1:8080"
-$env:LLAMA_MODEL="local"
-python -m uvicorn src.app:app --host 127.0.0.1 --port 8000
+docker compose -f compose.yaml down
 ```
 
 ## 3. Workspace security model
@@ -175,8 +182,6 @@ The UI keeps those separate for exactly that reason.
 
 Once this version is comfortable, good engineering exercises are:
 
-- SQLite persistence for sessions/messages/tool audit history
-- Markdown rendering and code highlighting in the browser
 - file-tree sidebar and click-to-open notes
 - `apply_patch` instead of whole-file writes
 - Git-backed workspace with automatic pre-mutation checkpoints

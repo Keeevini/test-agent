@@ -1,8 +1,30 @@
 # AGENTS.md
 
 Local-LLM agent UI: FastAPI backend streaming chat from `llama-server` (OpenAI-compatible API)
-with sandboxed filesystem tools exposed to the model. No tests, linter, CI, or git repo — verify
-changes by running the server.
+with sandboxed filesystem tools exposed to the model. There is no linter or CI; a focused
+regression suite lives in `tests/`. Verify changes by running the server.
+
+## Source navigation — required before editing code
+
+1. Read this root `AGENTS.md` for security and runtime constraints.
+2. For code changes, read `src/AGENTS.md`, then `src/INDEX.md`.
+3. Follow only the relevant directory `INDEX.md` files down to the feature.
+4. Open only the source files listed as owners of that behavior, plus required direct dependencies.
+5. When changing or adding source files, update the nearest directory `INDEX.md`
+   and every ancestor index whose structure/public contract changed.
+6. If a directory in `src/` has more than three coding files (`.py`, `.js`,
+   `.css`, `.html`; including `__init__.py`), it must have an `INDEX.md`.
+   Directories with fewer files may also have one when navigation benefits.
+
+**Do not use `agent/AGENTS.md` for runtime internals.**
+`src/agent/` is the application’s agent runtime implementation.
+Root `agent/` is reserved for future optional agent customizations and skills,
+including integrations like Obsidian and personal research capabilities.
+Development of the app normally happens in `src/`.
+
+`local/` contains private machine configuration/session data;
+`vault/` contains private model-facing workspace data. Never move, copy,
+log, commit, or include their contents in generated documentation or examples.
 
 ## Run (Docker — required)
 
@@ -48,19 +70,22 @@ Docker-level values (container name, host port, LLM URL) belong in `.devops/.env
 
 ## Layout
 
-- `src/app.py` — FastAPI app; SSE endpoints `/api/chat`, `/api/approval`, `/api/session/clear`,
-  `/api/health`; serves `src/static/`.
-- `src/agent/` — the agent package. See `agent/AGENTS.md` for the internals.
+- `src/app.py` — FastAPI composition: lifespan, static mount, cache middleware, router
+  registration. Routes live in `src/api/` (`chat`, `sessions`, `health`).
+- `src/agent/` — the **runtime** agent package. See `src/INDEX.md` and `src/agent/INDEX.md`
+  for the internals.
   - `src/agent/core.py` — the agent loop (`LocalAgent`); each concern lives in its own module
     (`prompt.py`, `approvals.py`, `model.py`, `session_store.py`).
   - `src/agent/tools/filesystem.py` — the only filesystem layer: named tools hard-sandboxed to
     `vault/`; mutating tools require browser approval.
   - `src/agent/token_counter.py` — heuristic token budget (chars ÷ 4).
   - `src/agent/session/` — the persistent SQLite session store (schema, models, DML, usage).
-- `src/static/` — plain HTML/JS/CSS UI.
+- `src/static/` — the browser UI: an ES-module `app.js` bootstrap plus `js/` domain modules
+  and `css/` domain stylesheets. See `src/static/INDEX.md`.
+- `tests/` — focused regression tests (run with `python -m unittest discover -s tests`).
 - `vault/` — the only tree the model can touch (personal data; git-ignored).
 - `local/` — per-machine config/secrets (git-ignored).
-- `agent/modules/` — optional, shareable agent customizations.
+- `agent/` — optional, shareable agent customizations and skills (NOT runtime code).
 - `.devops/` — Docker Compose + Dockerfile.
 - `opencode.json` — OpenCode agent → local llama server.
 

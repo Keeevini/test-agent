@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
+from src.api.chat import create_chat_router
+from src.api.health import create_health_router
+from src.api.sessions import create_sessions_router
 from src.agent import ApprovalManager, LocalAgent, SessionStore
 from src.agent.tools import WorkspaceTools
 
@@ -93,184 +93,11 @@ async def no_cache_static(request: Request, call_next):
     return response
 
 
-class ChatRequest(BaseModel):
-    session_id: str = Field(
-        min_length=1,
-        max_length=200,
-        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]*$",
-    )
-    message: str = Field(min_length=1, max_length=100_000)
-
-
-class ApprovalRequest(BaseModel):
-    approval_id: str
-    approved: bool
-
-
-class SessionRequest(BaseModel):
-    session_id: str
-
-
 @app.get("/")
 async def index():
     return FileResponse(SRC_DIR / "static" / "index.html")
 
 
-@app.get("/api/health")
-async def health():
-    return {
-        "ok": True,
-        "llama_base_url": LLAMA_BASE_URL,
-        "workspace": str(WORKSPACE),
-        "max_context_tokens": MAX_CONTEXT_TOKENS,
-    }
-
-
-@app.post("/api/chat")
-async def chat(request: ChatRequest):
-    async def event_stream():
-        try:
-            async for event in agent.stream_turn(request.session_id, request.message):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            logger.exception("Chat stream error for session %s", request.session_id)
-            event = {"type": "error", "message": str(exc)}
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@app.post("/api/approval")
-async def approval(request: ApprovalRequest):
-    found = await approvals.resolve(request.approval_id, request.approved)
-    if not found:
-        raise HTTPException(status_code=404, detail="Approval request not found or already resolved")
-    return {"ok": True}
-
-
-@app.post("/api/session/clear")
-async def clear_session(request: SessionRequest):
-    sessions.clear(request.session_id)
-    return {"ok": True}
-
-
-# ---------------------------------------------------------------------------
-# Session management endpoints
-# ---------------------------------------------------------------------------
-
-class CreateSessionRequest(BaseModel):
-    session_id: str | None = None
-    title: str = "Untitled Session"
-
-
-class UpdateSessionRequest(BaseModel):
-    title: str
-
-
-@app.get("/api/sessions")
-async def list_sessions(
-    limit: int = 50,
-    offset: int = 0,
-):
-    """List sessions ordered by most recently updated."""
-    meta_list = sessions.list(limit=limit, offset=offset)
-    return {
-        "sessions": [
-            {
-                "session_id": m.session_id,
-                "title": m.title,
-                "model": m.model,
-                "created_at": m.created_at,
-                "updated_at": m.updated_at,
-                "tokens_in": m.tokens_in,
-                "tokens_out": m.tokens_out,
-                "tokens_total": m.tokens_total,
-                "cost": m.cost,
-                "tools_used": m.tools_used,
-            }
-            for m in meta_list
-        ]
-    }
-
-
-@app.post("/api/sessions")
-async def create_session(request: CreateSessionRequest):
-    """Create a new session. If no session_id is provided, generate one."""
-    session_id = request.session_id or str(uuid.uuid4())
-    meta = sessions.create(session_id, title=request.title)
-    return {"session_id": meta.session_id, "title": meta.title}
-
-
-# NOTE: The ``/api/sessions/search`` route is declared before the
-# ``/api/sessions/{session_id}`` route. FastAPI matches routes in declaration
-# order, so the parameterized route would otherwise capture ``search`` as a
-# session_id and the search endpoint would be unreachable.
-@app.get("/api/sessions/search")
-async def search_sessions(q: str, limit: int = 50):
-    """Search sessions by title, session_id, or model."""
-    meta_list = sessions.search(q, limit=limit)
-    return {
-        "sessions": [
-            {
-                "session_id": m.session_id,
-                "title": m.title,
-                "model": m.model,
-                "created_at": m.created_at,
-                "updated_at": m.updated_at,
-                "tokens_in": m.tokens_in,
-                "tokens_out": m.tokens_out,
-                "tokens_total": m.tokens_total,
-                "cost": m.cost,
-                "tools_used": m.tools_used,
-            }
-            for m in meta_list
-        ]
-    }
-
-
-@app.get("/api/sessions/{session_id}")
-async def get_session(session_id: str):
-    """Get session metadata."""
-    meta = sessions.get(session_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {
-        "session_id": meta.session_id,
-        "title": meta.title,
-        "model": meta.model,
-        "created_at": meta.created_at,
-        "updated_at": meta.updated_at,
-        "tokens_in": meta.tokens_in,
-        "tokens_out": meta.tokens_out,
-        "tokens_total": meta.tokens_total,
-        "cost": meta.cost,
-        "tools_used": meta.tools_used,
-    }
-
-
-@app.put("/api/sessions/{session_id}")
-async def update_session(session_id: str, request: UpdateSessionRequest):
-    """Update session title."""
-    sessions.update_title(session_id, request.title)
-    return {"ok": True}
-
-
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session and its messages."""
-    sessions.delete(session_id)
-    return {"ok": True}
-
-
-@app.get("/api/sessions/{session_id}/messages")
-async def get_messages(session_id: str):
-    """Get all messages for a session."""
-    msgs = sessions.get_messages(session_id)
-    return {"messages": msgs}
+app.include_router(create_health_router(LLAMA_BASE_URL, WORKSPACE, MAX_CONTEXT_TOKENS))
+app.include_router(create_chat_router(agent, approvals))
+app.include_router(create_sessions_router(sessions))

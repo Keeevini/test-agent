@@ -23,13 +23,17 @@ class SessionsRepository:
         title: str = "Untitled Session",
         model: str | None = None,
     ) -> SessionMeta:
-        """Create a new session row. Idempotent — overwrites if it exists."""
+        """Create a missing session without modifying an existing one.
+
+        Repeated creates must preserve messages, title, usage, and timestamps.
+        """
         now = _utcnow()
         with self._lock:
             self._conn.execute(
-                "INSERT OR REPLACE INTO sessions "
+                "INSERT INTO sessions "
                 "(session_id, title, model, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(session_id) DO NOTHING",
                 (session_id, title, model, now, now),
             )
             self._conn.commit()
