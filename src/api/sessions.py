@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.agent.context import build_context_summary
+from src.agent.context_attribution import build_segments
 
 
 class SessionRequest(BaseModel):
@@ -48,7 +49,7 @@ def serialize_session(meta) -> dict:
 
 def create_sessions_router(sessions, max_context_tokens: int = 16384,
                             model: str = "local", tool_specs: list | None = None, *,
-                            tools=None) -> APIRouter:
+                            tools=None, tokenizer=None) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/session/clear')
@@ -113,9 +114,15 @@ def create_sessions_router(sessions, max_context_tokens: int = 16384,
             raise HTTPException(status_code=404, detail="Session not found")
         messages = sessions.get_context_messages(session_id)
         calls = sessions.list_model_calls(session_id)
+        segments = build_segments(messages, tool_specs or [])
+        # Prefer file content and reasoning when the bounded request budget is exhausted.
+        priority = {"loaded_files": 0, "model_reasoning": 1, "user_input": 2, "tool_usage": 3, "other": 4}
+        texts = [s.text for s in sorted(segments, key=lambda s: (priority.get(s.category, 5), -(s.seq or 0))) if s.text]
+        exact = await tokenizer.counts_for(texts) if tokenizer is not None else {}
         return build_context_summary(
             meta, messages, calls,
             limit=max_context_tokens, model=model, tool_specs=tool_specs or [],
+            segments=segments, exact_counts=exact,
         )
 
     @router.get('/api/sessions/{session_id}/context/messages')

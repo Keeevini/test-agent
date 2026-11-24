@@ -15,6 +15,7 @@ from src.api.sessions import create_sessions_router
 from src.agent import ApprovalManager, LocalAgent, SessionStore
 from src.agent.tools import WorkspaceTools
 from src.config import parse_context_limit
+from src.agent.llama_tokenizer import LlamaTextTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -107,4 +108,5 @@ app.include_router(create_sessions_router(
     model=LLAMA_MODEL,
     tool_specs=workspace_tools.specs,
     tools=workspace_tools,
+    tokenizer=LlamaTextTokenizer(agent.model_client.llama_url, agent.model_client.client),
 ))
