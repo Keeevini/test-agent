@@ -60,6 +60,9 @@ sessions.setLifecycleHandlers({
     void conversation.loadHistory(id);
     void contextWindow.selectSession(id);
   },
+  onMetadataChanged: id => {
+    if (id === sessions.currentId()) contextWindow.refresh();
+  },
   onClear: () => {
     conversation.showEmpty();
     void contextWindow.selectSession(sessions.currentId());

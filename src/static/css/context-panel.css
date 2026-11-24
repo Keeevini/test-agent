@@ -349,3 +349,11 @@ details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
 .context-detail-raw-retry[hidden] {
   display: none !important;
 }
+
+.context-detail-lifetime, .context-detail-difference { display: block; margin-top: .35rem; font-size: .75rem; color: var(--muted); }
+.context-detail-session-info { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: .25rem .65rem; margin: .65rem 0; font-size: .75rem; }
+.context-detail-session-info dt { color: var(--muted); }
+.context-detail-session-info dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.context-detail-segment--unattributed { background: repeating-linear-gradient(135deg, var(--muted-2) 0 3px, var(--panel) 3px 6px); }
+.context-detail-tool-row { display: grid; grid-template-columns: 1fr auto; gap: .15rem .5rem; padding: .3rem .5rem; font-size: .75rem; }
+.context-detail-tool-components { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); }

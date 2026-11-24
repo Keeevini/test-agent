@@ -8,9 +8,7 @@
 // data. They are rendered with textContent only and are never interpolated
 // into markup.
 //
-// Attribution is always estimated: providers report aggregate usage, not
-// per-file/per-tool splits, so every token-attribution row is labeled
-// "Estimated" even when the aggregate total is provider-based.
+// Text attribution is independent of provider-based active occupancy.
 
 // Immutable display order. The bar and the legend share this order.
 const CATEGORIES = [
@@ -23,17 +21,12 @@ const CATEGORIES = [
   ['available', 'Available'],
 ];
 
-// Source label per category. Token-attribution rows are always Estimated; the
-// available row is display-only capacity, not counted model usage.
-const CATEGORY_SOURCE = {
-  previous_compaction: 'Not implemented',
-  user_input: 'Estimated',
-  loaded_files: 'Estimated',
-  model_reasoning: 'Estimated',
-  tool_usage: 'Estimated',
-  other: 'Estimated',
-  available: 'Configured limit',
-};
+const SOURCE_LABEL = { tokenized: 'Tokenized text', estimated: 'Estimated', mixed: 'Mixed', none: 'No text' };
+function categorySource(key, data) {
+  if (key === 'previous_compaction') return 'Not implemented';
+  if (key === 'available') return 'Configured limit';
+  return SOURCE_LABEL[data.breakdown_sources?.[key]] || 'Estimated';
+}
 
 function num(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -87,10 +80,45 @@ function appendSummary(container, data) {
     section.appendChild(counts);
   }
 
+  appendLifetime(section, data);
+  appendSessionInfo(section, data);
   appendSourceLine(section, data);
   appendBar(section, data, breakdown);
   appendLegend(section, data, breakdown);
   container.appendChild(section);
+}
+
+function appendLifetime(section, data) {
+  const lifetime = data.session_lifetime;
+  const value = num(lifetime?.tokens_total);
+  const source = {provider: 'provider', estimated: 'includes estimates', none: 'no calls'}[lifetime?.source];
+  section.appendChild(makeSpan('context-detail-lifetime',
+    `Lifetime session tokens: ${value === null ? '—' : fmt(value)}${source ? ` (${source})` : ''}`));
+}
+
+function formatTime(value) {
+  if (typeof value !== 'string' || !value) return '—';
+  // SQLite CURRENT_TIMESTAMP is UTC, not browser-local time.
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+}
+
+function appendSessionInfo(section, data) {
+  const info = document.createElement('dl');
+  info.className = 'context-detail-session-info';
+  const count = key => num(data[key]) === null ? '—' : fmt(data[key]);
+  for (const [label, value] of [
+    ['Session name', typeof data.session_title === 'string' ? data.session_title : '—'],
+    ['Created', formatTime(data.created_at)], ['Last activity', formatTime(data.updated_at)],
+    ['Messages (all roles)', count('message_count')], ['Assistant messages', count('assistant_message_count')],
+    ['User messages', count('user_message_count')],
+  ]) {
+    const term = document.createElement('dt'); term.textContent = label;
+    const desc = document.createElement('dd'); desc.textContent = value;
+    info.append(term, desc);
+  }
+  section.appendChild(info);
 }
 
 function appendSourceLine(section, data) {
@@ -102,10 +130,15 @@ function appendSourceLine(section, data) {
   else if (usedSource === 'mixed_estimate') usedLabel = 'Partly estimated total';
   else if (usedSource === 'estimated') usedLabel = 'Estimated total';
   else usedLabel = 'Unverified data';
-  // The breakdown is always an estimate, even when the aggregate is
-  // provider-based; never assert per-category exactness.
-  line.textContent = `${usedLabel} · Estimated breakdown`;
+  const breakdownLabel = data.breakdown_source === 'tokenizer_assisted'
+    ? 'Tokenizer-assisted breakdown (approximate attribution)' : 'Estimated breakdown';
+  line.textContent = `${usedLabel} · ${breakdownLabel}`;
   section.appendChild(line);
+  const diff = num(data.attribution_difference);
+  if (diff !== null && diff !== 0) {
+    const note = diff > 0 ? `${fmt(diff)} tokens not attributed to text` : `${fmt(-diff)} more attributed text tokens than active usage; bar proportions adjusted only`;
+    section.appendChild(makeSpan('context-detail-difference', note));
+  }
 }
 
 function appendBar(container, data, breakdown) {
@@ -113,12 +146,17 @@ function appendBar(container, data, breakdown) {
   bar.className = 'context-detail-bar';
   bar.setAttribute('role', 'img');
   bar.setAttribute('aria-label', barLabel(data, breakdown));
-  for (const [key] of CATEGORIES) {
-    const raw = breakdown[key];
+  const used = num(data.used_tokens) ?? 0;
+  const attributed = num(data.attributed_tokens) ?? used;
+  const scale = attributed > used && attributed > 0 ? used / attributed : 1;
+  const entries = [...CATEGORIES.slice(0, -1), ['unattributed'], CATEGORIES.at(-1)];
+  for (const [key] of entries) {
+    const raw = key === 'unattributed' ? Math.max(0, used - attributed) : breakdown[key];
     const tokens = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+    const displayTokens = key === 'available' || key === 'unattributed' ? tokens : tokens * scale;
     const width =
       typeof data.context_limit_tokens === 'number' && data.context_limit_tokens > 0
-        ? 100 * tokens / data.context_limit_tokens
+        ? 100 * displayTokens / data.context_limit_tokens
         : 0;
     const seg = document.createElement('div');
     seg.className = `context-detail-segment context-detail-segment--${key}`;
@@ -143,19 +181,20 @@ function appendLegend(container, data, breakdown) {
     const raw = breakdown[key];
     const tokens = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
     const isFiles = key === 'loaded_files';
+    const isTools = key === 'tool_usage';
     // The loaded-files row is the <summary> of a native <details>, so it is a
     // keyboard-accessible accordion; the other rows are plain divs.
-    const row = document.createElement(isFiles ? 'summary' : 'div');
+    const row = document.createElement(isFiles || isTools ? 'summary' : 'div');
     row.className = 'context-detail-legend-row';
     row.appendChild(makeSwatch(key));
     row.appendChild(makeSpan('context-detail-legend-label', label));
     row.appendChild(makeSpan('context-detail-legend-count', fmt(tokens)));
-    row.appendChild(makeSpan('context-detail-legend-source', CATEGORY_SOURCE[key]));
-    if (isFiles) {
+    row.appendChild(makeSpan('context-detail-legend-source', categorySource(key, data)));
+    if (isFiles || isTools) {
       const details = document.createElement('details');
-      details.className = 'context-detail-files';
+      details.className = isFiles ? 'context-detail-files' : 'context-detail-files context-detail-tools';
       details.appendChild(row);
-      details.appendChild(makeFileList(data));
+      details.appendChild(isFiles ? makeFileList(data) : makeToolList(data));
       legend.appendChild(details);
     } else {
       legend.appendChild(row);
@@ -196,12 +235,29 @@ function makeFileList(data) {
     tokens.className = 'context-detail-file-tokens';
     tokens.textContent = fmt(file && num(file.tokens));
     row.appendChild(tokens);
+    tokens.title = SOURCE_LABEL[file?.source] || 'Estimated';
     if (file && typeof file.occurrences === 'number' && file.occurrences > 1) {
       const occ = document.createElement('span');
       occ.className = 'context-detail-file-occurrences';
       occ.textContent = `\u00d7${file.occurrences}`;
       row.appendChild(occ);
     }
+    list.appendChild(row);
+  }
+  return list;
+}
+
+function makeToolList(data) {
+  const list = document.createElement('div');
+  list.className = 'context-detail-files-list';
+  const tools = Array.isArray(data.tool_usage_details) ? data.tool_usage_details : [];
+  if (!tools.length) list.appendChild(makeSpan('context-detail-files-empty', 'No attributed tools'));
+  for (const tool of tools) {
+    const row = document.createElement('div'); row.className = 'context-detail-tool-row';
+    row.appendChild(makeSpan('context-detail-files-path', tool.name || '(unmatched tool)'));
+    row.appendChild(makeSpan('context-detail-file-tokens', fmt(tool.tokens)));
+    row.appendChild(makeSpan('context-detail-tool-components',
+      `${fmt(tool.calls)} calls · calls ${fmt(tool.call_tokens)} · results ${fmt(tool.result_tokens)} · definition ${fmt(tool.definition_tokens)} · ${SOURCE_LABEL[tool.source] || 'Estimated'}`));
     list.appendChild(row);
   }
   return list;
