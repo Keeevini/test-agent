@@ -105,4 +105,5 @@ app.include_router(create_sessions_router(
     max_context_tokens=MAX_CONTEXT_TOKENS,
     model=LLAMA_MODEL,
     tool_specs=workspace_tools.specs,
+    tools=workspace_tools,
 ))

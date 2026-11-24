@@ -60,7 +60,11 @@ export async function respondToApproval(approval_id, approved) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approval_id, approved }),
   });
-  if (!r.ok) throw new Error(`Approval failed: HTTP ${r.status}`);
+  if (!r.ok) {
+    const error = new Error(`Approval failed: HTTP ${r.status}`);
+    error.status = r.status;
+    throw error;
+  }
   return r.json();
 }
 

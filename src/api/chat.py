@@ -6,6 +6,7 @@ router owns no global state. SSE framing and response headers are unchanged
 from the original ``app.py`` handlers.
 """
 
+import contextlib
 import json
 import logging
 
@@ -37,8 +38,11 @@ def create_chat_router(agent, approvals) -> APIRouter:
     async def chat(request: ChatRequest):
         async def event_stream():
             try:
-                async for event in agent.stream_turn(request.session_id, request.message):
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                async with contextlib.aclosing(
+                    agent.stream_turn(request.session_id, request.message)
+                ) as stream:
+                    async for event in stream:
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             except Exception as exc:
                 logger.exception("Chat stream error for session %s", request.session_id)
                 event = {"type": "error", "message": str(exc)}

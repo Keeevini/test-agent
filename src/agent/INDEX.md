@@ -22,11 +22,28 @@ root, not the submodules.
 ## `core.py` — `LocalAgent`
 - `LocalAgent(llama_base_url, model, tools, approvals, sessions, max_agent_steps=12, max_context_tokens=16384)`
 - `stream_turn(session_id, user_text) -> AsyncIterator[dict]` — runs one user turn
-  under a per-session lock and yields SSE dicts. Event lifecycle per step:
-  `status` → model `reasoning_delta`/`content_delta` → `tool_call` /
-  `approval_required` / `tool_result` for each tool → `context` (usage) → `done`.
-  On the step cap it yields `error`. Persists user/assistant/tool messages to the
-  store and schedules a one-shot title after the first streamed turn.
+  under a per-session lock and yields SSE dicts. Per step: `status` → model
+  `reasoning_delta`/`content_delta` with `model_part_end` boundaries → for each tool, `tool_call` (request:
+  `tool_call_id`/`name`/`arguments`/`alias`) → optionally `approval_required` →
+  `approval_decision` (`status`: `"approved"`|`"denied"`/`alias`) → `tool_result`
+  (`tool_call_id`/`name`/`ok`/`result`/`alias`) → `context` (usage) → `done`.
+  On the step cap it yields `error`. Invalid-JSON args emit the request with the
+  raw argument string, then a failed `tool_result` (not executed). Persists
+  user/assistant/tool messages to the store and schedules a one-shot title after
+  the first streamed turn. `alias` is a display-only label resolved from the
+  current tool registry (`tools.aliases`); `None` when unconfigured.
+- Durable lifecycle: missing/duplicate tool-call IDs are normalized on the call
+  objects before the assistant row is persisted; one durable tool outcome is
+  stored per normal attempted call (via a local `settle` helper) before the
+  associated SSE event; a mutating tool's approval `pending` state is persisted
+  before `approval_required` and the `approval_decision` is emitted before any
+  result. A `try/finally` around the tool batch persists a synthetic
+  `interrupted` outcome for any unsettled call and discards/`cancelled`-marks any
+  still-pending approval when the generator is closed mid-step.
+- Each persisted assistant step records provider/fallback usage once in the ledger
+  before tools execute; the usage tracker records tool names only. New tool
+  rows store literal output and `activity.context_meta` (name, outcome, optional
+  successful read path). Title usage is lifetime-only.
 - `close()` — closes the model client.
 - Invariant: `stream_turn` is the single place that mutates the message list and
   the store for a turn; `time` stamps (`created`/`streamed`/`completed`) are
@@ -48,21 +65,30 @@ root, not the submodules.
 - `close()` — closes the httpx client.
 
 ## `approvals.py` — `ApprovalManager`
-- `ApprovalManager()`; `create(session_id, tool_name, arguments) -> PendingApproval`;
-  `resolve(approval_id, approved) -> bool`; `wait(item) -> bool`.
+- `ApprovalManager()`; `create(session_id, tool_name, arguments, on_decision=None)
+  -> PendingApproval`; `resolve(approval_id, approved) -> bool`;
+  `wait(item) -> bool`; `discard(item) -> None`.
 - `PendingApproval` dataclass: `approval_id`, `session_id`, `tool_name`,
-  `arguments`, `event`, `approved`.
-- Invariant: `resolve` sets the event (unblocking `wait`); `wait` pops the pending
-  item. Mutating tools are gated here, not in the prompt.
+  `arguments`, `event`, `approved`, `on_decision`.
+- `resolve` is first-wins: returns `False` if the item is absent **or** already
+  decided; invokes the `on_decision` callback (synchronous, no await) before
+  writing the decision, propagating callback exceptions so a failed persistence
+  is not acknowledged. `wait` only awaits the event (it no longer pops the item);
+  `discard` is synchronous and idempotent, removing only the identical item.
+- Invariant: the first decision wins and cannot be overwritten; core owns removal
+  via `discard` in a `finally` block. Mutating tools are gated here, not in the
+  prompt.
 
 ## `session_store.py` — `SessionStore`
 - Async wrapper over the persistent `session.store.SessionStore`. Keeps per-process
   `asyncio.Lock`s in `lock(session_id)`.
-- `messages(session_id)` seeds a `SYSTEM_PROMPT` on first use; `append_message`,
-  `update_message_content`, `clear`, `close`.
+- `messages(session_id)` seeds a `SYSTEM_PROMPT` on first use (model projection:
+  `include_activity=False`). `append_message(session_id, role, content, *,
+  activity=None)`, `update_message_content`, `update_message_activity`, `clear`,
+  `close`.
 - Proxies for the endpoints: `list`, `get`, `create`, `search`, `update_title`,
-  `delete`, `get_messages`, `record_model_call`, `list_model_calls`,
-  `get_raw_message_page`.
+  `delete`, `get_messages` (history projection: `include_activity=True`),
+  `record_model_call`, `list_model_calls`, `get_raw_message_page`.
 
 ## `title.py` — `SessionTitleGenerator`
 - `SessionTitleGenerator(model_client)`;

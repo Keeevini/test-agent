@@ -18,7 +18,6 @@ Covers the ``build_context_summary`` pure function and the HTTP endpoint:
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -54,23 +53,12 @@ def _meta(session_id="s1", title="Test", tokens_in=0, tokens_out=0,
 
 
 def _tool_result(call_id, name, content, ok, path=None):
-    """Build a tool message dict in the save_tool_result shape.
-
-    The message's ``content`` field is the JSON-serialized inner payload,
-    matching how the persistent store serialises dict content on write.
-    """
-    inner: dict[str, Any] = {
-        "role": "tool",
-        "tool_call_id": call_id,
-        "content": content,
-        "context_meta": {"name": name, "ok": ok},
-    }
+    """Build the decoded tool message projection returned by the store."""
+    msg = {"role": "tool", "tool_call_id": call_id, "content": content,
+           "context_meta": {"name": name, "ok": ok}}
     if name == "read_file" and ok and isinstance(path, str):
-        inner["context_meta"]["path"] = path
-    return {
-        "role": "tool",
-        "content": json.dumps(inner, ensure_ascii=False),
-    }
+        msg["context_meta"]["path"] = path
+    return msg
 
 
 def _make_tool_specs():
@@ -278,10 +266,8 @@ class BuildContextSummaryTests(TestCase):
         msgs = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
-            {"role": "tool", "content": json.dumps(
-                {"role": "tool", "tool_call_id": "x",
-                 "content": "data", "context_meta": {"name": "read_file", "ok": True}}
-            )},
+            {"role": "tool", "tool_call_id": "x", "content": "data",
+             "context_meta": {"name": "read_file", "ok": True}},
         ]
         result = build_context_summary(
             meta, msgs, [],

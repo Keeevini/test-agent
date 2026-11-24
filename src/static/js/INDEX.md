@@ -28,7 +28,8 @@ calls `fetch`.
   `GET /api/sessions/{id}/context/messages?offset&limit`. Returns
   `{session_id, offset, limit, total, has_more, messages}`.
 - `respondToApproval(approval_id, approved) -> Promise<object>` —
-  `POST /api/approval`.
+  `POST /api/approval`. On non-OK, the thrown `Error` gains `error.status`
+  (the HTTP status code) so callers can distinguish 404 from 500.
 - `decodeSseEvents(response) -> AsyncGenerator<object>` — incremental SSE
   decoder: normalizes CRLF, keeps a trailing `\r` across chunks so a split CRLF
   pair is still normalized, and flushes any final trailing frame after EOF.

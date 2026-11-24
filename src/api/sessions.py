@@ -47,7 +47,8 @@ def serialize_session(meta) -> dict:
 
 
 def create_sessions_router(sessions, max_context_tokens: int = 16384,
-                            model: str = "local", tool_specs: list | None = None) -> APIRouter:
+                            model: str = "local", tool_specs: list | None = None, *,
+                            tools=None) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/session/clear')
@@ -102,7 +103,7 @@ def create_sessions_router(sessions, max_context_tokens: int = 16384,
     async def get_messages(session_id: str):
         """Get all messages for a session."""
         msgs = sessions.get_messages(session_id)
-        return {"messages": msgs}
+        return {"messages": msgs, "tool_aliases": tools.aliases if tools is not None else {}}
 
     @router.get('/api/sessions/{session_id}/context')
     async def get_context(session_id: str):

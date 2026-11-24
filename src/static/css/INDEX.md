@@ -12,7 +12,7 @@ preserved verbatim across these files, and the cascade order is retained
 | `layout.css` | App shell, topbar, badge, layout grid, chat panel, context sidebar. | |
 | `sessions.css` | Sidebar, session list, rows, delete button, drawer. | |
 | `conversation.css` | Messages, empty state, examples, stream cursor, Markdown, composer. | |
-| `activity.css` | Activity cards, reasoning/tool/result/approval, context ring. Tooltip positioned below trigger (`top: calc(100% + 6px)`, z-index 10). | |
+| `activity.css` | Activity cards, reasoning/tool/result/approval, context ring. Tooltip positioned below trigger (`top: calc(100% + 6px)`, z-index 10). Approval state colors and resolved/historical animation suppression. | |
 | `dialogs.css` | Confirmation dialog (themed, non-native). | |
 | `context-panel.css` | Context-window detail panel (bar, legend, files, system prompt). Raw controls use a scoped `[hidden] { display: none !important }` override. | Uses `tokens.css` variables only. |
 | `responsive.css` | Mobile drawer, context drawer, reduced motion, print. Context-open grid reset at 1100px/920px drawer breakpoints. | |

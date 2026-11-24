@@ -13,9 +13,11 @@ independently. `apply_schema` runs the table DDLs then the indexes in order.
 
 ## `__init__.py`
 - `apply_schema(conn) -> None` — executes the ordered `_MIGRATIONS` (sessions
-  table, then messages table, then model_calls table) followed by `CREATE_INDEXES`,
-  then commits.
-- `SCHEMA_VERSION: int = 1` — a **code constant only**. There is no `schema_version`
+  table, then messages table, then model_calls table), then the guarded v1 → v2 migration (adds the
+  nullable `activity_json` column to existing `messages` tables via
+  `PRAGMA table_info` + `ALTER TABLE`), then `CREATE_INDEXES`, then commits.
+  Idempotent on reopen.
+- `SCHEMA_VERSION: int = 2` — a **code constant only**. There is no `schema_version`
   table or migration ledger in the database; do not claim version tracking exists
   in the DB. `_MIGRATIONS` is the ordered DDL list.
 
@@ -26,7 +28,8 @@ independently. `apply_schema` runs the table DDLs then the indexes in order.
 
 ## `messages.py`
 - `CREATE_MESSAGES_TABLE` — `messages` table: `session_id`, `seq`, `role`,
-  `content`; primary key `(session_id, seq)`;
+  `content`, `activity_json` (nullable, versioned presentation metadata);
+  primary key `(session_id, seq)`;
   `FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE`.
 
 ## `model_calls.py`

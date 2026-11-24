@@ -54,26 +54,12 @@ def _extract_loaded_files(messages: list[dict]) -> list[dict]:
     for msg in messages:
         if msg.get("role") != "tool":
             continue
+        if not _is_read_file_row(msg):
+            continue
+        meta = msg["context_meta"]
+        path = meta["path"]
         content = msg.get("content")
-        if not isinstance(content, str):
-            continue
-        # Parse stored JSON; legacy rows are plain text.
-        try:
-            obj = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(obj, dict):
-            continue
-        meta = obj.get("context_meta")
-        if not isinstance(meta, dict):
-            continue
-        if meta.get("name") != "read_file" or not meta.get("ok"):
-            continue
-        path = meta.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        inner = obj.get("content")
-        text = inner if isinstance(inner, str) else ""
+        text = content if isinstance(content, str) else ""
         tokens = estimate_tokens(text)
         if path in files:
             files[path]["occurrences"] += 1
@@ -154,21 +140,14 @@ def _category_weights(
 
 def _is_read_file_row(msg: dict) -> bool:
     """Check if a tool message is a successful read_file row."""
-    content = msg.get("content")
-    if not isinstance(content, str):
-        return False
-    try:
-        obj = json.loads(content)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    if not isinstance(obj, dict):
-        return False
-    meta = obj.get("context_meta")
+    meta = msg.get("context_meta")
     return (
-        isinstance(meta, dict)
+        msg.get("role") == "tool"
+        and isinstance(meta, dict)
         and meta.get("name") == "read_file"
         and meta.get("ok") is True
         and isinstance(meta.get("path"), str)
+        and bool(meta["path"])
     )
 
 

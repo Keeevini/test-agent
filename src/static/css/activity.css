@@ -37,6 +37,11 @@
 .approve-button { background: color-mix(in srgb, var(--good) 20%, var(--panel)); color: #b8eccd; }
 .deny-button { background: color-mix(in srgb, var(--bad) 20%, var(--panel)); color: #ffc1c1; }
 .approval-state { color: var(--muted); font-size: 12px; margin-left: auto; }
+.approval-state.approved { color: var(--good); }
+.approval-state.denied { color: var(--bad); }
+.approval-state.cancelled { color: var(--muted); }
+.activity-card.approval.resolved,
+.activity-card.approval.historical { animation: none; }
 /* Context-usage ring button. The fill circle's stroke-dashoffset is driven by
    JS (status.js): dashoffset = circumference * (1 - percent/100). The count is
    the formatted used-token count shown to the right of the ring. The themed

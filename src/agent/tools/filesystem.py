@@ -19,6 +19,7 @@ class ToolSpec:
     description: str
     parameters: dict[str, Any]
     mutating: bool = False
+    alias: str | None = None
 
     def as_openai(self) -> dict[str, Any]:
         return {
@@ -61,6 +62,7 @@ class WorkspaceTools:
                     "required": ["path"],
                     "additionalProperties": False,
                 },
+                alias="Show folder structure",
             ),
             ToolSpec(
                 "read_file",
@@ -71,6 +73,7 @@ class WorkspaceTools:
                     "required": ["path"],
                     "additionalProperties": False,
                 },
+                alias="Read file",
             ),
             ToolSpec(
                 "search_text",
@@ -89,6 +92,7 @@ class WorkspaceTools:
                     "required": ["query"],
                     "additionalProperties": False,
                 },
+                alias="Search files",
             ),
             ToolSpec(
                 "write_file",
@@ -103,6 +107,7 @@ class WorkspaceTools:
                     "additionalProperties": False,
                 },
                 mutating=True,
+                alias="Write file",
             ),
             ToolSpec(
                 "append_file",
@@ -117,6 +122,7 @@ class WorkspaceTools:
                     "additionalProperties": False,
                 },
                 mutating=True,
+                alias="Append to file",
             ),
             ToolSpec(
                 "create_directory",
@@ -128,6 +134,7 @@ class WorkspaceTools:
                     "additionalProperties": False,
                 },
                 mutating=True,
+                alias="Create folder",
             ),
             ToolSpec(
                 "move_path",
@@ -142,6 +149,7 @@ class WorkspaceTools:
                     "additionalProperties": False,
                 },
                 mutating=True,
+                alias="Move or rename path",
             ),
             ToolSpec(
                 "delete_path",
@@ -160,8 +168,14 @@ class WorkspaceTools:
                     "additionalProperties": False,
                 },
                 mutating=True,
+                alias="Delete path",
             ),
         ]
+
+    @property
+    def aliases(self) -> dict[str, str]:
+        return {s.name: s.alias.strip() for s in self.specs
+                if isinstance(s.alias, str) and s.alias.strip()}
 
     def is_mutating(self, name: str) -> bool:
         spec = next((s for s in self.specs if s.name == name), None)
