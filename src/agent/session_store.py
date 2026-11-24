@@ -43,13 +43,36 @@ class SessionStore:
             msgs = self._store.get_messages(session_id)
         return msgs
 
-    def append_message(self, session_id: str, role: str, content: Any) -> int:
-        """Append a message to the session in the persistent store."""
-        return self._store.append_message(session_id, role, content)
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: Any,
+        *,
+        activity: dict[str, Any] | None = None,
+        tool_call_id: str | None = None,
+    ) -> int:
+        """Append a message to the session in the persistent store.
+
+        ``activity`` is optional presentation metadata, forwarded to the
+        persistent store and kept separate from the model-facing content.
+        """
+        return self._store.append_message(
+            session_id, role, content, activity=activity, tool_call_id=tool_call_id
+        )
+
+    def append_assistant_with_usage(self, session_id: str, content: dict, usage: dict, *, activity=None) -> int:
+        return self._store.append_assistant_with_usage(session_id, content, usage, activity=activity)
 
     def update_message_content(self, session_id: str, seq: int, content: Any) -> None:
         """Update the content of an existing message by its sequence number."""
         self._store.update_message_content(session_id, seq, content)
+
+    def update_message_activity(
+        self, session_id: str, seq: int, activity: dict[str, Any]
+    ) -> None:
+        """Update the presentation metadata of an existing message."""
+        self._store.update_message_activity(session_id, seq, activity)
 
     def clear(self, session_id: str) -> None:
         self._store.delete_session(session_id)
@@ -87,4 +110,32 @@ class SessionStore:
         self._locks.pop(session_id, None)
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
-        return self._store.get_messages(session_id)
+        """Read-only history projection, including presentation metadata."""
+        return self._store.get_messages(session_id, include_activity=True)
+
+    def get_context_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Read-only canonical history with durable sequence markers."""
+        return self._store.get_messages(session_id, include_activity=True, include_seq=True)
+
+    def record_model_call(
+        self,
+        session_id: str,
+        call_key: str,
+        kind: str,
+        assistant_seq: int | None,
+        usage: dict[str, Any],
+    ) -> bool:
+        """Record one completed model invocation in the durable ledger."""
+        return self._store.record_model_call(
+            session_id, call_key, kind, assistant_seq, usage
+        )
+
+    def list_model_calls(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the session's model-call ledger rows, oldest first."""
+        return self._store.list_model_calls(session_id)
+
+    def get_raw_message_page(
+        self, session_id: str, offset: int = 0, limit: int = 20
+    ) -> dict:
+        """Return a bounded, read-only page of raw stored messages."""
+        return self._store.get_raw_message_page(session_id, offset, limit)

@@ -15,18 +15,22 @@ exactly once; `styles.css` is the `@import` manifest for the stylesheets.
 ## `app.js` — bootstrap wiring
 - `import * as api` from `js/api.js`; `createMessagesView`,
   `createConversationController` (conversation/), `initComposer`
-  (conversation/), `createSessionsController` (sessions/), `createStatusView`
-  and `initMobileSidebar` (shell/).
+  (conversation/), `createSessionsController` (sessions/), `createStatusView`,
+  `initMobileSidebar`, and `createContextWindowController` (shell/).
 - Constructs the views from `index.html` DOM IDs (`messages`, `emptyState`,
-  `scrollToBottom`, `connectionBadge`, `contextIndicator`, `contextFill`,
-  `contextPct`, `sidebarToggle`, `sidebar`, `sidebarBackdrop`, `sessionList`,
-  `sessionSearch`, `composer`, `prompt`, `sendButton`, `clearButton`).
+  `scrollToBottom`, `connectionBadge`, `contextIndicator`, `contextRingFill`,
+  `contextCount`, `contextPanel`, `contextPanelBody`, `contextClose`,
+  `contextBackdrop`, `sidebarToggle`, `sidebar`, `sidebarBackdrop`,
+  `sessionList`, `sessionSearch`, `composer`, `prompt`, `sendButton`,
+  `clearButton`) and the `.layout` element.
 - Wires the `sessions` ↔ `conversation` lifecycle handlers **after**
   construction (`isBusy`, `onActivate`, `onClear`) to avoid circular imports.
+  `onActivate` also calls `contextWindow.selectSession(id)`; `onClear` calls
+  `contextWindow.selectSession(sessions.currentId())`.
 - Listens for `online`/`offline` and drives the status view.
-- Runs the one-time startup sequence: `sessions.init()`,
-  `conversation.loadHistory(sessions.currentId())`, `status.checkHealth()`,
-  then focuses the prompt.
+- Runs the one-time startup sequence: `status.checkHealth()`,
+  `sessions.init()`, `conversation.loadHistory(sessions.currentId())`,
+  `contextWindow.selectSession(sessions.currentId())`, then focuses the prompt.
 
 ## Invariants
 - The module graph is a DAG; there are no circular imports. The only

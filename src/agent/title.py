@@ -77,16 +77,21 @@ class SessionTitleGenerator:
             + f"\n\nGenerate a title for this session (max {MAX_LENGTH} characters)."
         )
 
-    async def generate(self, messages: list[dict[str, Any]]) -> str | None:
+    async def generate(
+        self, messages: list[dict[str, Any]]
+    ) -> tuple[str | None, dict[str, Any] | None]:
         """Generate a title from the conversation.
 
-        Returns the first non-empty line of the model's response, or ``None``
-        if the model returns nothing usable. The first non-empty line is taken
-        because the model is asked for a single line and may add trailing
-        whitespace or newlines.
+        Returns a ``(title, usage)`` pair. ``title`` is the first non-empty
+        line of the model's response, or ``None`` if the model returns nothing
+        usable (the first non-empty line is taken because the model is asked
+        for a single line and may add trailing whitespace or newlines).
+        ``usage`` is the provider-usage dict from the same finalized assistant
+        object, present whenever a model call completed — even when the title
+        is empty — so lifetime usage is never lost.
         """
         if not messages:
-            return None
+            return None, None
 
         # Build the prompt from the whole conversation (all turns), not just
         # the first message, so the title reflects what the session is about.
@@ -98,18 +103,20 @@ class SessionTitleGenerator:
         ])
 
         # Consume the iterator fully so the stream is closed and the assistant
-        # dict is finalized (its ``content`` is set in the iterator's
-        # ``finally`` block).
+        # dict is finalized (its ``content`` and ``usage`` are set in the
+        # iterator's ``finally`` block).
         async for _ in events:
             pass
 
+        usage = assistant.get("usage")
+
         content = (assistant.get("content") or "").strip()
         if not content:
-            return None
+            return None, usage
 
         # Take the first non-empty line as the title.
         for line in content.splitlines():
             line = line.strip()
             if line:
-                return self.truncate(line, MAX_LENGTH)
-        return None
+                return self.truncate(line, MAX_LENGTH), usage
+        return None, usage

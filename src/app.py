@@ -14,6 +14,8 @@ from src.api.health import create_health_router
 from src.api.sessions import create_sessions_router
 from src.agent import ApprovalManager, LocalAgent, SessionStore
 from src.agent.tools import WorkspaceTools
+from src.config import parse_context_limit
+from src.agent.llama_tokenizer import LlamaTextTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ LLAMA_BASE_URL = (
     or "http://127.0.0.1:8080/v1"
 )
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "local")
-MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "16384"))
+MAX_CONTEXT_TOKENS = parse_context_limit(os.getenv("MAX_CONTEXT_TOKENS"))
 
 # Session history is project-owned state: only this app reads and writes it,
 # never the model, so it lives in the per-machine ``local/`` tree rather than
@@ -100,4 +102,11 @@ async def index():
 
 app.include_router(create_health_router(LLAMA_BASE_URL, WORKSPACE, MAX_CONTEXT_TOKENS))
 app.include_router(create_chat_router(agent, approvals))
-app.include_router(create_sessions_router(sessions))
+app.include_router(create_sessions_router(
+    sessions,
+    max_context_tokens=MAX_CONTEXT_TOKENS,
+    model=LLAMA_MODEL,
+    tool_specs=workspace_tools.specs,
+    tools=workspace_tools,
+    tokenizer=LlamaTextTokenizer(agent.model_client.llama_url, agent.model_client.client),
+))

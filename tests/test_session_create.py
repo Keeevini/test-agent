@@ -19,7 +19,7 @@ class CreateSessionTests(TestCase):
             try:
                 before = store.create_session("same-id", title="Original")
                 store.append_message("same-id", "user", "keep this")
-                store.update_usage("same-id", tokens_in=9)
+                store.record_model_call("same-id", "title", "title", None, {"prompt_tokens": 9, "completion_tokens": 0, "prompt_source": "provider", "completion_source": "provider"})
 
                 returned = store.create_session("same-id", title="Replacement")
                 self.assertEqual(returned.title, "Original")

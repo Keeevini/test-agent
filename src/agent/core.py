@@ -14,7 +14,9 @@ conversation. The individual concerns live in their own modules:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import logging
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -26,6 +28,8 @@ from .session.usage import UsageTracker
 from .title import SessionTitleGenerator
 from .token_counter import count_message_tokens
 from .tools import ToolError, WorkspaceTools
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -94,6 +98,25 @@ class LocalAgent:
             "percentage": round(pct, 1),
         }
 
+    def _normalize_call_ids(self, tool_calls: list[dict[str, Any]]) -> None:
+        """Normalize tool call IDs in place.
+
+        Ensures every call has a non-empty ``id`` and that IDs within the
+        batch are unique. Missing IDs are assigned ``call_<uuid>``. Duplicate
+        IDs (beyond the first occurrence) are replaced with fresh
+        ``call_<uuid>`` values so the batch can be persisted and matched
+        unambiguously.
+        """
+        seen: set[str] = set()
+        for call in tool_calls:
+            cid = call.get("id")
+            if not isinstance(cid, str) or not cid:
+                cid = f"call_{uuid.uuid4().hex}"
+            elif cid in seen:
+                cid = f"call_{uuid.uuid4().hex}"
+            seen.add(cid)
+            call["id"] = cid
+
     async def stream_turn(self, session_id: str, user_text: str) -> AsyncIterator[dict[str, Any]]:
         async with self.sessions.lock(session_id):
             messages = self.sessions.messages(session_id)
@@ -102,13 +125,64 @@ class LocalAgent:
 
             tracker = UsageTracker()
 
+            last_assistant_seq: int | None = None
+            last_step_activity: dict[str, Any] | None = None
+            alias_map: dict[str, str] = self.tools.aliases
+
             for step in range(self.max_agent_steps):
                 yield {"type": "status", "text": f"Model turn {step + 1}"}
-                prompt_tokens = count_message_tokens(messages)
                 created = _now_ms()
                 assistant_message, stream_events = await self.model_client.stream(messages)
+                # Track runs of consecutive deltas of the same kind.
+                # Only reasoning_delta and content_delta are relevant.
+                parts: list[dict[str, Any]] = []
+                current_run: dict[str, Any] | None = None
+                run_start_mono: float = 0.0
+
                 async for event in stream_events:
+                    kind = None
+                    if event.get("type") == "reasoning_delta":
+                        kind = "reasoning"
+                    elif event.get("type") == "content_delta":
+                        kind = "content"
+
+                    if kind and event.get("text"):
+                        chars = len(event["text"])
+                        if current_run is None:
+                            current_run = {"kind": kind, "chars": 0}
+                            run_start_mono = time.monotonic()
+                        elif current_run["kind"] != kind:
+                            # Finalize previous run on kind switch.
+                            end_mono = time.monotonic()
+                            if current_run["kind"] == "reasoning":
+                                current_run["duration_ms"] = max(
+                                    0, int((end_mono - run_start_mono) * 1000)
+                                )
+                            parts.append(current_run)
+                            # Yield model_part_end for the finished run.
+                            end_event: dict[str, Any] = {
+                                "type": "model_part_end",
+                                "kind": current_run["kind"],
+                            }
+                            if current_run["kind"] == "reasoning":
+                                end_event["duration_ms"] = current_run["duration_ms"]
+                            yield end_event
+                            # Start new run.
+                            current_run = {"kind": kind, "chars": 0}
+                            run_start_mono = time.monotonic()
+                        current_run["chars"] += chars
+
                     yield event
+
+                # Finalize last run after stream ends.
+                if current_run is not None:
+                    end_mono = time.monotonic()
+                    if current_run["kind"] == "reasoning":
+                        current_run["duration_ms"] = max(
+                            0, int((end_mono - run_start_mono) * 1000)
+                        )
+                    parts.append(current_run)
+                    current_run = None
                 # Per-activity timing (mirrors OpenCode's `time` section).
                 #   ``created``  — when this model turn started.
                 #   ``streamed`` — when the provider response finished streaming,
@@ -121,11 +195,37 @@ class LocalAgent:
                     "created": created,
                     "streamed": streamed,
                 }
+                # Step A: Normalize missing/duplicate IDs on the call objects
+                # themselves before the assistant row is persisted.
+                tool_calls = assistant_message.get("tool_calls") or []
+                self._normalize_call_ids(tool_calls)
                 # Per-tool timing: each tool call's ``created`` is when the model
                 # emitted it (end of streaming); ``ran``/``completed`` are stamped
                 # in the loop below as the tool executes.
-                for call in assistant_message.get("tool_calls") or []:
+                for call in tool_calls:
                     call["time"] = {"created": streamed}
+
+                # Step A: Initialize step activity and persist the assistant row.
+                step_activity = {"version": 1, "calls": {}, "parts": parts}
+                usage = assistant_message.pop("usage")
+                assistant_seq = self.sessions.append_assistant_with_usage(
+                    session_id, assistant_message, usage, activity=step_activity,
+                )
+                last_assistant_seq = assistant_seq
+                last_step_activity = step_activity
+
+                # Yield the last model_part_end after persistence so the
+                # frontend can finalize the final segment.
+                if parts:
+                    last = parts[-1]
+                    end_event: dict[str, Any] = {
+                        "type": "model_part_end",
+                        "kind": last["kind"],
+                    }
+                    if last["kind"] == "reasoning":
+                        end_event["duration_ms"] = last["duration_ms"]
+                    yield end_event
+
                 messages.append(assistant_message)
                 # Schedule a one-shot, non-blocking title for this session now
                 # that the first model turn has finished streaming. Scheduling
@@ -136,15 +236,7 @@ class LocalAgent:
                 # awaited here, so it never blocks the turn. The ``_titled``
                 # guard makes later iterations no-ops.
                 self._schedule_title(session_id, messages)
-                completion_tokens = count_message_tokens([assistant_message])
-                tracker.record_tokens(prompt_tokens, completion_tokens)
-                assistant_seq = self.sessions.append_message(
-                    session_id,
-                    "assistant",
-                    assistant_message,
-                )
 
-                tool_calls = assistant_message.get("tool_calls") or []
                 if not tool_calls:
                     # No tools to run: the turn is complete at the end of streaming.
                     assistant_message["time"]["completed"] = _now_ms()
@@ -156,94 +248,177 @@ class LocalAgent:
                     yield {"type": "done"}
                     return
 
-                for call in tool_calls:
-                    function = call.get("function", {})
-                    name = function.get("name", "")
-                    raw_args = function.get("arguments", "{}")
-                    call_id = call.get("id") or f"call_{uuid.uuid4().hex}"
-                    call_time = call.get("time")
+                # Step B: Settlement helper — one durable outcome per call.
+                # All normal branches call it exactly once before yielding result.
+                settled_ids: set[str] = set()
 
-                    try:
-                        args = json.loads(raw_args or "{}")
-                        if not isinstance(args, dict):
-                            raise ValueError("tool arguments must be a JSON object")
-                    except Exception as exc:
-                        result = f"Tool arguments were invalid JSON: {exc}"
-                        yield {
-                            "type": "tool_result",
-                            "name": name,
-                            "arguments": raw_args,
-                            "ok": False,
-                            "result": result,
-                            "meta": _result_meta(name, result),
-                        }
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": call_id,
-                            "content": result,
-                        })
-                        call_time["completed"] = _now_ms()
-                        continue
+                def persist_outcome(
+                    name: str, call_id: str, result: str, ok: bool, *,
+                    interrupted: bool = False,
+                ) -> dict[str, Any]:
+                    """The single durable outcome writer, including synthetic results."""
+                    meta = {} if interrupted else _result_meta(name, result)
+                    activity = {"version": 1, "ok": ok, "meta": meta}
+                    if interrupted:
+                        activity["interrupted"] = True
+                    self.sessions.append_message(
+                        session_id, "tool", result, tool_call_id=call_id, activity=activity,
+                    )
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
+                    settled_ids.add(call_id)
+                    return meta
 
-                    yield {"type": "tool_call", "name": name, "arguments": args}
-
-                    if self.tools.is_mutating(name):
-                        pending = await self.approvals.create(session_id, name, args)
-                        yield {
-                            "type": "approval_required",
-                            "approval_id": pending.approval_id,
-                            "name": name,
-                            "arguments": args,
-                        }
-                        approved = await self.approvals.wait(pending)
-                        if not approved:
-                            result = "User denied this mutating operation."
-                            yield {
-                                "type": "tool_result",
-                                "name": name,
-                                "arguments": args,
-                                "ok": False,
-                                "result": result,
-                                "meta": _result_meta(name, result),
-                            }
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": call_id,
-                                "content": result,
-                            })
-                            call_time["completed"] = _now_ms()
-                            continue
-
-                    call_time["ran"] = _now_ms()
-                    try:
-                        result = self.tools.execute(name, args)
-                        ok = True
-                    except ToolError as exc:
-                        result = f"Tool error: {exc}"
-                        ok = False
-                    call_time["completed"] = _now_ms()
-
-                    tracker.record_tool(name)
-
-                    yield {
+                def settle(
+                    name: str, args: Any, call: dict[str, Any], call_id: str,
+                    result: str, ok: bool,
+                ) -> dict[str, Any]:
+                    """Persist a normal result before emitting its unchanged SSE payload."""
+                    call["time"]["completed"] = _now_ms()
+                    meta = persist_outcome(name, call_id, result, ok)
+                    return {
                         "type": "tool_result",
+                        "tool_call_id": call_id,
                         "name": name,
                         "arguments": args,
                         "ok": ok,
                         "result": result,
-                        "meta": _result_meta(name, result),
+                        "meta": meta,
+                        "alias": alias_map.get(name),
                     }
-                    tool_msg = {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": result,
-                    }
-                    messages.append(tool_msg)
-                    self.sessions.append_message(
-                        session_id,
-                        "tool",
-                        result,
-                    )
+
+                # Step D: try/finally around the tool batch for interruption safety.
+                try:
+                    for call in tool_calls:
+                        function = call.get("function", {})
+                        name = function.get("name", "")
+                        raw_args = function.get("arguments", "{}")
+                        call_id = call["id"]
+                        call_time = call.get("time")
+
+                        # Step A: Mark requested and persist before request emission.
+                        step_activity["calls"][call_id] = {"requested": True}
+                        self.sessions.update_message_activity(
+                            session_id, assistant_seq, step_activity
+                        )
+
+                        # Parse args; invalid args keep the raw string as the
+                        # request payload so the renderer (which accepts
+                        # strings) can show what was attempted.
+                        try:
+                            args = json.loads(raw_args or "{}")
+                            if not isinstance(args, dict):
+                                raise ValueError("tool arguments must be a JSON object")
+                            request_args = args
+                            invalid_result = None
+                        except Exception as exc:
+                            request_args = raw_args
+                            invalid_result = f"Tool arguments were invalid JSON: {exc}"
+
+                        yield {
+                            "type": "tool_call",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "arguments": request_args,
+                            "alias": alias_map.get(name),
+                        }
+
+                        if invalid_result is not None:
+                            yield settle(name, raw_args, call, call_id, invalid_result, False)
+                            continue
+
+                        if self.tools.is_mutating(name):
+                            # Step C: Durable first-wins approval.
+                            def _on_decision(
+                                pending, approved, _call_id=call_id
+                            ) -> None:
+                                step_copy = copy.deepcopy(step_activity)
+                                step_copy["calls"].setdefault(_call_id, {})[
+                                    "approval"
+                                ] = {
+                                    "approval_id": pending.approval_id,
+                                    "status": "approved" if approved else "denied",
+                                }
+                                self.sessions.update_message_activity(
+                                    session_id, assistant_seq, step_copy
+                                )
+                                # Update in-memory after successful commit.
+                                step_activity.clear()
+                                step_activity.update(step_copy)
+
+                            pending = await self.approvals.create(
+                                session_id, name, args, on_decision=_on_decision
+                            )
+                            # Persist pending status before yielding approval_required.
+                            step_activity["calls"][call_id]["approval"] = {
+                                "approval_id": pending.approval_id,
+                                "status": "pending",
+                            }
+                            self.sessions.update_message_activity(
+                                session_id, assistant_seq, step_activity
+                            )
+
+                            try:
+                                yield {
+                                    "type": "approval_required",
+                                    "approval_id": pending.approval_id,
+                                    "tool_call_id": call_id,
+                                    "name": name,
+                                    "arguments": args,
+                                    "alias": alias_map.get(name),
+                                }
+                                approved = await self.approvals.wait(pending)
+                                # Emit approval_decision with stored terminal status.
+                                yield {
+                                    "type": "approval_decision",
+                                    "approval_id": pending.approval_id,
+                                    "tool_call_id": call_id,
+                                    "name": name,
+                                    "status": "approved" if approved else "denied",
+                                    "alias": alias_map.get(name),
+                                }
+                            finally:
+                                self.approvals.discard(pending)
+                                # If still pending, mark cancelled.
+                                if pending.approved is None:
+                                    step_activity["calls"][call_id]["approval"][
+                                        "status"
+                                    ] = "cancelled"
+                                    self.sessions.update_message_activity(
+                                        session_id, assistant_seq, step_activity
+                                    )
+
+                            if not approved:
+                                result = "User denied this mutating operation."
+                                yield settle(name, args, call, call_id, result, False)
+                                continue
+
+                        call_time["ran"] = _now_ms()
+                        try:
+                            result = self.tools.execute(name, args)
+                            ok = True
+                        except ToolError as exc:
+                            result = f"Tool error: {exc}"
+                            ok = False
+
+                        tracker.record_tool(name)
+
+                        yield settle(name, args, call, call_id, result, ok)
+                finally:
+                    # Step D: Interrupted step safety.
+                    # Persist synthetic outcomes for unsettled calls.
+                    for call in tool_calls:
+                        call_id = call["id"]
+                        if call_id in settled_ids:
+                            continue
+                        result = "Tool call interrupted; no result recorded."
+                        try:
+                            persist_outcome((call.get("function") or {}).get("name", ""),
+                                            call_id, result, False, interrupted=True)
+                        except Exception:
+                            logger.exception(
+                                "Failed to persist interrupted tool outcome for %s",
+                                call_id,
+                            )
 
                 # Stamp the turn's completion once all of its tool calls have
                 # settled, then persist the updated timing.
@@ -255,6 +430,16 @@ class LocalAgent:
                 yield {"type": "context", **self._context_usage(messages)}
 
             self._flush_usage(tracker, session_id)
+
+            # Persist terminal_error on the last assistant row (if any).
+            if last_step_activity is not None:
+                error_msg = (
+                    f"Agent stopped after {self.max_agent_steps} model/tool iterations."
+                )
+                last_step_activity["terminal_error"] = error_msg
+                self.sessions.update_message_activity(
+                    session_id, last_assistant_seq, last_step_activity
+                )
 
             yield {
                 "type": "error",
@@ -274,6 +459,12 @@ class LocalAgent:
         """
         if session_id in self._titled:
             return
+        meta = self.sessions.get(session_id)
+        if meta is None or meta.title != "Untitled Session" or any(
+            row["kind"] == "title" for row in self.sessions.list_model_calls(session_id)
+        ):
+            self._titled.add(session_id)
+            return
         self._titled.add(session_id)
         task = asyncio.create_task(self._generate_title(session_id, messages))
         self._title_tasks.add(task)
@@ -291,9 +482,16 @@ class LocalAgent:
         ``update_title`` path.
         """
         try:
-            title = await self._title.generate(messages)
+            title, usage = await self._title.generate(messages)
         except Exception:
-            title = None
+            title, usage = None, None
+        # Record the title model call's usage in the durable ledger even when
+        # the title is empty (a completed model call still spent tokens).
+        # Lifetime-only: does not create a chat row or move the latest-chat marker.
+        if usage:
+            self.sessions.record_model_call(
+                session_id, "title", "title", None, usage
+            )
         if title:
             self.sessions.update_title(session_id, title)
 

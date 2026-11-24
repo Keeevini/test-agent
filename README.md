@@ -82,6 +82,10 @@ Open:
 http://127.0.0.1:8000
 ```
 
+Set the context limit in `local/.env` using `MAX_CONTEXT_TOKENS` (default 16384).
+Compose 2.24+ loads this optional app configuration. Recreate the container after changes;
+its model endpoint still comes from `.devops/.env`.
+
 Container name, host port, and LLM URL live in `.devops/.env` (copy
 `.env.example` to get started). `compose.yaml` reads it automatically and every
 variable has a default, so the command above works out of the box. To stop:

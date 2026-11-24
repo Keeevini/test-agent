@@ -79,6 +79,12 @@ export function createMessagesView({ messagesEl, emptyState, scrollToBottom }) {
 
   function removeCursor() {
     if (streamCursor) {
+      // Clear the body's reference before removing the node so a later
+      // markdown.renderInto (flushFinal) cannot reattach a removed cursor.
+      const parent = streamCursor.parentElement;
+      if (parent && parent._streamCursor === streamCursor) {
+        delete parent._streamCursor;
+      }
       streamCursor.remove();
       streamCursor = null;
     }

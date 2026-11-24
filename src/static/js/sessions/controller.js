@@ -22,6 +22,14 @@ export function createSessionsController({ api, root, search, storage, drawer })
   let titlePollTimer = null;
   let titlePollsLeft = 0;
   let refreshGeneration = 0;
+  let metadataSignature = null;
+  function notifyMetadata(current) {
+    if (!current || current.session_id !== sessionId) return;
+    const signature = current.title;
+    const changed = metadataSignature?.id === sessionId && metadataSignature.value !== signature;
+    metadataSignature = {id: sessionId, value: signature};
+    if (changed) lifecycle.onMetadataChanged?.(sessionId);
+  }
   // One transition (createNew / remove) is in flight at a time. The lock is
   // acquired before the first await so a delayed mutation cannot overlap a
   // send or a newer navigation.
@@ -101,6 +109,7 @@ export function createSessionsController({ api, root, search, storage, drawer })
       onDelete,
     });
     const current = items.find(item => item.session_id === sessionId);
+    notifyMetadata(current);
     if (current?.title === UNTITLED_SESSION_TITLE && titlePollsLeft > 0) {
       titlePollTimer = setTimeout(pollForSessionTitle, 3000);
     }
@@ -137,6 +146,7 @@ export function createSessionsController({ api, root, search, storage, drawer })
     // list refreshing on delayed ticks so the generated title appears without
     // a page reload.
     const current = items.find(item => item.session_id === sessionId);
+    notifyMetadata(current);
     if (current?.title === UNTITLED_SESSION_TITLE && !titlePollTimer) {
       scheduleTitlePolls();
     }

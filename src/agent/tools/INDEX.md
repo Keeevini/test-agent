@@ -15,6 +15,9 @@ the host, not by the prompt.
   `ToolSpec.as_openai()`). Read tools: `list_directory`, `read_file`,
   `search_text`. Mutating tools: `write_file`, `append_file`, `create_directory`,
   `move_path`, `delete_path` (all `mutating=True`).
+- `aliases -> dict[str, str]` — display-only labels: `{ canonical_name: alias }`
+  for all specs with a non-empty `alias`. Sourced from the current registry;
+  not persisted. `as_openai()` is unchanged (no alias in the provider schema).
 - `is_mutating(name) -> bool` — whether a tool requires approval.
 - `execute(name, args) -> str` — dispatches to `tool_<name>`; wraps failures in
   `ToolError`.

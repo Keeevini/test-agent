@@ -1,8 +1,8 @@
 """Session management routers.
 
-``create_sessions_router(sessions)`` builds the session endpoints with the
-``SessionStore`` injected. ``serialize_session`` is the single projection of a
-session metadata record onto its public API shape, shared by list/search/get.
+``create_sessions_router(sessions, ...)`` builds the session endpoints with
+the ``SessionStore`` injected. ``serialize_session`` is the single projection
+of a session metadata record onto its public API shape, shared by list/search/get.
 
 Route ordering matters: ``/api/sessions/search`` is declared before
 ``/api/sessions/{session_id}`` so the parameterized route cannot capture
@@ -11,8 +11,11 @@ Route ordering matters: ``/api/sessions/search`` is declared before
 
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from src.agent.context import build_context_summary
+from src.agent.context_attribution import build_segments
 
 
 class SessionRequest(BaseModel):
@@ -44,7 +47,9 @@ def serialize_session(meta) -> dict:
     }
 
 
-def create_sessions_router(sessions) -> APIRouter:
+def create_sessions_router(sessions, max_context_tokens: int = 16384,
+                            model: str = "local", tool_specs: list | None = None, *,
+                            tools=None, tokenizer=None) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/session/clear')
@@ -99,6 +104,38 @@ def create_sessions_router(sessions) -> APIRouter:
     async def get_messages(session_id: str):
         """Get all messages for a session."""
         msgs = sessions.get_messages(session_id)
-        return {"messages": msgs}
+        return {"messages": msgs, "tool_aliases": tools.aliases if tools is not None else {}}
+
+    @router.get('/api/sessions/{session_id}/context')
+    async def get_context(session_id: str):
+        """Get read-only context analytics for a session."""
+        meta = sessions.get(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        messages = sessions.get_context_messages(session_id)
+        calls = sessions.list_model_calls(session_id)
+        segments = build_segments(messages, tool_specs or [])
+        # Prefer file content and reasoning when the bounded request budget is exhausted.
+        priority = {"loaded_files": 0, "model_reasoning": 1, "user_input": 2, "tool_usage": 3, "other": 4}
+        texts = [s.text for s in sorted(segments, key=lambda s: (priority.get(s.category, 5), -(s.seq or 0))) if s.text]
+        exact = await tokenizer.counts_for(texts) if tokenizer is not None else {}
+        return build_context_summary(
+            meta, messages, calls,
+            limit=max_context_tokens, model=model, tool_specs=tool_specs or [],
+            segments=segments, exact_counts=exact,
+        )
+
+    @router.get('/api/sessions/{session_id}/context/messages')
+    async def get_context_raw_messages(
+        session_id: str,
+        offset: int = Query(ge=0, default=0),
+        limit: int = Query(ge=1, le=50, default=20),
+    ):
+        """Get a read-only paginated page of raw stored messages."""
+        meta = sessions.get(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        page = sessions.get_raw_message_page(session_id, offset, limit)
+        return {"session_id": session_id, **page}
 
     return router

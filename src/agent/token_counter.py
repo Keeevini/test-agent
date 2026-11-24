@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 
 def estimate_tokens(text: str) -> int:
     """Estimate the number of tokens in a string.
@@ -29,3 +31,15 @@ def count_message_tokens(messages: list[dict]) -> int:
             total += estimate_tokens(fn.get("arguments", ""))
         total += 4  # per-message overhead (role, separators)
     return total
+
+
+def estimate_request_tokens(messages: list[dict], tools: list[dict]) -> int:
+    """Estimate tokens for the exact outbound request (messages + tool specs).
+
+    Fallback only: used when the provider reports no prompt count. Unlike
+    ``count_message_tokens`` it also accounts for the tool specifications
+    sent alongside the messages. Heuristic, not an exact tokenizer count.
+    """
+    return count_message_tokens(messages) + estimate_tokens(
+        json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+    )

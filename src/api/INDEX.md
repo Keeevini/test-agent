@@ -10,15 +10,18 @@ dependencies injected (the `agent`, `approvals`, and `sessions` objects), so
 |---|---|---|---|
 | `__init__.py` | Package marker | — | No side effects; creates no app object. |
 | `chat.py` | Chat + approval SSE | `create_chat_router(agent, approvals)` | See below. |
-| `sessions.py` | Session CRUD | `create_sessions_router(sessions)`, `serialize_session(meta)` | See below. |
+| `sessions.py` | Session CRUD + context | `create_sessions_router(sessions, max_context_tokens, model, tool_specs, *, tools=None)`, `serialize_session(meta)` | See below. |
 | `health.py` | Connectivity probe | `create_health_router(llama_base_url, workspace, max_context_tokens)` | See below. |
 
 ## `chat.py`
 - `create_chat_router(agent, approvals) -> APIRouter`
   - `POST /api/chat` — `chat(request: ChatRequest)`. Streams `agent.stream_turn(...)`
-    as `text/event-stream` SSE. Emits each event as `data: {json}\n\n`; on
-    exception, logs and emits a final `{"type": "error", ...}` event. Response
-    headers: `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+    as `text/event-stream` SSE. The inner generator is wrapped in
+    `contextlib.aclosing` so a client disconnect closes it (running the agent's
+    interruption cleanup); `CancelledError` is not swallowed. Emits each event as
+    `data: {json}\n\n`; on exception, logs and emits a final
+    `{"type": "error", ...}` event. Response headers: `Cache-Control: no-cache`,
+    `X-Accel-Buffering: no`.
   - `POST /api/approval` — `approval(request: ApprovalRequest)`. Calls
     `approvals.resolve(approval_id, approved)`; returns `{"ok": true}` or 404.
   - Models: `ChatRequest` (`session_id` pattern-validated, `message`),
@@ -27,8 +30,9 @@ dependencies injected (the `agent`, `approvals`, and `sessions` objects), so
   change them without updating the frontend `api.js` iterator.
 
 ## `sessions.py`
-- `create_sessions_router(sessions) -> APIRouter` — `sessions` is the
-  `src.agent.SessionStore` async wrapper.
+- `create_sessions_router(sessions, max_context_tokens=16384, model="local",
+  tool_specs=None, *, tools=None) -> APIRouter` — `sessions` is the
+  `src.agent.SessionStore` async wrapper; `tools` supplies current display aliases.
   - `POST /api/session/clear` — `clear_session(SessionRequest)` → `{"ok": true}`.
   - `GET /api/sessions?limit&offset` — `list_sessions` → `{"sessions": [...]}`.
   - `POST /api/sessions` — `create_session(CreateSessionRequest)`; server assigns
@@ -37,7 +41,15 @@ dependencies injected (the `agent`, `approvals`, and `sessions` objects), so
   - `GET /api/sessions/{session_id}` — `get_session`; 404 when absent.
   - `PUT /api/sessions/{session_id}` — `update_session(UpdateSessionRequest)`.
   - `DELETE /api/sessions/{session_id}` — `delete_session`.
-  - `GET /api/sessions/{session_id}/messages` — `get_messages` → `{"messages": [...]}`.
+  - `GET /api/sessions/{session_id}/messages` — `get_messages` →
+    `{"messages": [...], "tool_aliases": {...}}`.
+  - `GET /api/sessions/{session_id}/context` — `get_context`; read-only context
+    analytics via `build_context_summary`; 404 when session absent.
+  - `GET /api/sessions/{session_id}/context/messages?offset&limit` —
+    `get_context_raw_messages`; read-only paginated raw messages via
+    `sessions.get_raw_message_page`. `offset` ge=0, `limit` ge=1 le=50
+    (default 20). Returns `{session_id, offset, limit, total, has_more,
+    messages}`. 404 when session absent.
 - `serialize_session(meta) -> dict` — single projection of a session metadata
   record onto its public shape. Keys (all preserved): `session_id`, `title`,
   `model`, `created_at`, `updated_at`, `tokens_in`, `tokens_out`, `tokens_total`,

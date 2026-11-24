@@ -31,9 +31,13 @@ class SessionStore(SessionsRepository, MessagesRepository):
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
-        self._init_db()
+        try:
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            self._init_db()
+            self._conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            self._conn.close()
+            raise
 
     def _init_db(self) -> None:
         apply_schema(self._conn)

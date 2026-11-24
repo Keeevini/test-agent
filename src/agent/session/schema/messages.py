@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS messages (
     seq INTEGER NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    tool_call_id TEXT,
+    activity_json TEXT,
+    CHECK ((role = 'tool' AND tool_call_id IS NOT NULL AND length(tool_call_id) > 0)
+           OR (role != 'tool' AND tool_call_id IS NULL)),
     PRIMARY KEY (session_id, seq),
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 )
