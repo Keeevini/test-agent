@@ -32,17 +32,9 @@ public entry; the repositories and schema are maintained independently.
 - `search_sessions(query, limit=50) -> list[SessionMeta]` — case-insensitive `LIKE`
   on title / session_id / model.
 - `update_title(session_id, title)`; `delete_session(session_id)` (CASCADE to messages).
-- `update_usage(session_id, tokens_in=0, tokens_out=0, cost=0.0, tools_used=None)`
-  — additive counters; `tools_used` names are merged (deduplicated).
+- `update_usage(session_id, cost=0.0, tools_used=None)` — cost/tool names only, no token write. Session get/list/search derive token totals via a selected-page aggregate of `model_calls`.
 - `set_model(session_id, model)`.
-- `record_model_call(session_id, call_key, kind, assistant_seq, usage) -> bool`
-  — inserts one durable ledger row into `model_calls` and increments the
-  lifetime `sessions` counters **only** on a real insert. Idempotent per
-  `(session_id, call_key)` (`INSERT OR IGNORE`); a duplicate returns `False`
-  and never double-counts. A missing session (FK violation) returns `False`
-  and is never recreated. Validates `usage` (`prompt_tokens` /
-  `completion_tokens` are `int >= 0`, `prompt_source` / `completion_source`
-  are `str`) and raises `ValueError` otherwise.
+- `record_model_call(session_id, call_key, kind, assistant_seq, usage) -> bool` — title-only (`title`, `title`, null). Duplicate key returns false; missing session never recreated. Chat rows use atomic assistant append. Required counts nonnegative ints, sources provider/estimated; optional cached/reasoning counts preserve null or zero.
 - `list_model_calls(session_id) -> list[dict]` — ledger rows oldest first,
   ordered by `recorded_at` then `assistant_seq` (never by same-second
   timestamps alone). "Latest chat call" is `kind == 'chat'` + max `assistant_seq`.
@@ -50,7 +42,8 @@ public entry; the repositories and schema are maintained independently.
 ## `message_repo.py` — `MessagesRepository`
 - `get_messages(session_id, *, include_activity=False, include_seq=False)` — chronological canonical projection. Assistant JSON decoded; tool content remains literal and `tool_call_id` comes from its column. Activity and seq are opt-in.
 - `append_message(session_id, role, content, *, activity=None, tool_call_id=None) -> int` — returns new `seq`, touches session; tool requires literal string and nonempty explicit ID; non-tool requires null ID. `activity_json` holds outcome/presentation data only.
-- `get_raw_message_page(session_id, offset, limit)` — bounded count + page query, at most one preceding non-tool row for page-boundary association. Entries `{seq, role, created_ms, raw, tool_name?}`. `raw` is the full decoded stored message plus activity; name is derived, not persisted twice. Timestamps only from stored `time.created`.
+- `append_assistant_with_usage(session_id, content, usage, *, activity=None)` — one lock/transaction for assistant + unique `chat:<seq>` ledger row; rollback both on failure. Assistant content never stores `usage`.
+- `get_raw_message_page(session_id, offset, limit)` — bounded count + page query, at most one preceding non-tool row for page-boundary association. Entries `{seq, role, created_ms, raw, tool_name?}`. `raw` is the full decoded stored message plus activity and chat usage joined by seq from a bounded ledger query; name is derived, not persisted twice. Timestamps only from stored `time.created`.
 - `update_message_content(session_id, seq, content)` — replaces content by `seq`
   (used to stamp timing metadata); leaves `activity_json` untouched.
 - `update_message_activity(session_id, seq, activity)` — replaces the
@@ -66,7 +59,4 @@ public entry; the repositories and schema are maintained independently.
 - `_utcnow() -> str` — current UTC time as `YYYY-MM-DD HH:MM:SS` (SQLite-compatible).
 
 ## `usage.py` — `UsageTracker`
-- `UsageTracker` dataclass: `tokens_in`, `tokens_out`, `cost`, `tools_used`.
-- `record_tokens(prompt_tokens, completion_tokens)`; `record_tool(tool_name)`
-  (deduplicated); `flush(store, session_id)` — persists via `store.update_usage`
-  and resets the tracker.
+- `record_tool(tool_name)`; `flush(store, session_id)` — persist deduplicated executed tool names only. Never records model tokens.

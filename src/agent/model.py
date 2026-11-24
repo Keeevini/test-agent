@@ -146,7 +146,7 @@ class ModelClient:
         ``finally`` block so it is populated even if the client
         disconnects.
 
-        The finalized ``assistant`` carries a stored-only ``usage`` dict
+        The finalized ``assistant`` carries a transient ``usage`` dict
         with prompt/completion token counts and per-field provenance
         (``"provider"`` or ``"estimated"``). Provider counts are
         preferred; a missing count falls back to the app's explicit

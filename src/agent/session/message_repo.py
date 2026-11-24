@@ -87,35 +87,35 @@ class MessagesRepository:
                 raise ValueError("Tool rows require literal content and a nonempty tool_call_id")
         elif tool_call_id is not None:
             raise ValueError("Only tool rows may have a tool_call_id")
-        if isinstance(content, dict):
-            content_str = json.dumps(content, ensure_ascii=False)
-        else:
-            content_str = content
-        activity_str = None
-        if activity is not None:
-            activity_str = json.dumps(activity, ensure_ascii=False)
-        now = _utcnow()
-        with self._lock:
-            # Get the next seq number
-            row = self._conn.execute(
-                "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq "
-                "FROM messages WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
-            seq = row["next_seq"]
-            self._conn.execute(
-                "INSERT INTO messages "
-                "(session_id, seq, role, content, tool_call_id, activity_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (session_id, seq, role, content_str, tool_call_id, activity_str),
-            )
-            # Touch the session's updated_at
-            self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
-                (now, session_id),
-            )
-            self._conn.commit()
+        with self._lock, self._conn:
+            return self._append_message_locked(session_id, role, content, activity, tool_call_id)
+
+    def _append_message_locked(self, session_id, role, content, activity, tool_call_id=None) -> int:
+        """Caller owns lock/transaction; no commit inside this helper."""
+        if role == "assistant" and isinstance(content, dict) and "usage" in content:
+            raise ValueError("Assistant usage belongs in model_calls")
+        content_str = json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else content
+        activity_str = json.dumps(activity, ensure_ascii=False) if activity is not None else None
+        seq = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["next_seq"]
+        self._conn.execute(
+            "INSERT INTO messages (session_id, seq, role, content, tool_call_id, activity_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, seq, role, content_str, tool_call_id, activity_str),
+        )
+        self._conn.execute("UPDATE sessions SET updated_at = ? WHERE session_id = ?", (_utcnow(), session_id))
         return seq
+
+    def append_assistant_with_usage(self, session_id: str, content: dict, usage: dict, *, activity=None) -> int:
+        """Commit one assistant and exactly one completed chat call together."""
+        values = self._validate_model_usage(usage)
+        with self._lock, self._conn:
+            seq = self._append_message_locked(session_id, "assistant", content, activity)
+            if not self._insert_model_call_locked(session_id, f"chat:{seq}", "chat", seq, values):
+                raise RuntimeError("Duplicate chat ledger key")
+            return seq
 
     def get_raw_message_page(
         self,
@@ -148,6 +148,16 @@ class MessagesRepository:
                     "WHERE session_id = ? AND seq < ? AND role != 'tool' "
                     "ORDER BY seq DESC LIMIT 1", (session_id, rows[0]["seq"]),
                 ).fetchone()
+            usage_by_seq = {}
+            if rows:
+                for usage in self._conn.execute(
+                    "SELECT assistant_seq, prompt_tokens, completion_tokens, prompt_source, completion_source, "
+                    "cached_prompt_tokens, reasoning_tokens FROM model_calls "
+                    "WHERE session_id = ? AND kind = 'chat' AND assistant_seq BETWEEN ? AND ?",
+                    (session_id, rows[0]["seq"], rows[-1]["seq"]),
+                ):
+                    data = dict(usage)
+                    usage_by_seq[data.pop("assistant_seq")] = data
         projected = [self._project_row(session_id, r) for r in rows]
         preceding = [self._project_row(session_id, prefix)] if prefix else []
         links = associate_tool_results(preceding + projected)
@@ -156,6 +166,8 @@ class MessagesRepository:
             activity = self._parse_activity(r["activity_json"])
             if activity is not None:
                 msg["activity"] = activity
+            if r["role"] == "assistant" and r["seq"] in usage_by_seq:
+                msg["usage"] = usage_by_seq[r["seq"]]
             created_ms = None
             time_field = msg.get("time")
             if isinstance(time_field, dict):
@@ -194,6 +206,8 @@ class MessagesRepository:
         assistant message that was appended earlier in the turn.
         """
         if isinstance(content, dict):
+            if "usage" in content:
+                raise ValueError("Assistant usage belongs in model_calls")
             content_str = json.dumps(content, ensure_ascii=False)
         else:
             content_str = content

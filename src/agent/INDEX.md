@@ -40,8 +40,7 @@ root, not the submodules.
   result. A `try/finally` around the tool batch persists a synthetic
   `interrupted` outcome for any unsettled call and discards/`cancelled`-marks any
   still-pending approval when the generator is closed mid-step.
-- Each persisted assistant step records provider/fallback usage once in the ledger
-  before tools execute; the usage tracker records tool names only. New tool
+- Each persisted assistant step and provider/fallback ledger row commit atomically before tools execute; the usage tracker records tool names only. New tool
   rows store literal output, explicit `tool_call_id` column and `activity.ok`/formatter metadata. `persist_outcome` is shared by normal and interrupted paths; file attribution joins the batch call arguments. Title usage is lifetime-only.
 - `close()` — closes the model client.
 - Invariant: `stream_turn` is the single place that mutates the message list and
@@ -87,7 +86,7 @@ root, not the submodules.
   `close`.
 - Proxies for the endpoints: `list`, `get`, `create`, `search`, `update_title`,
   `delete`, `get_messages` (history projection: `include_activity=True`),
-  `get_context_messages` (history + seq), `record_model_call`, `list_model_calls`, `get_raw_message_page`.
+  `get_context_messages` (history + seq), `append_assistant_with_usage`, `record_model_call` (title only), `list_model_calls`, `get_raw_message_page`.
 
 ## `title.py` — `SessionTitleGenerator`
 - `SessionTitleGenerator(model_client)`;

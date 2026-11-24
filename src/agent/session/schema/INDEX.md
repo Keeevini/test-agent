@@ -12,11 +12,11 @@ independently. `apply_schema` runs the table DDLs then the indexes in order.
 | `indexes.py` | Index DDL | `CREATE_INDEXES` | See below. |
 
 ## `__init__.py`
-- `apply_schema(conn)` — initialize an empty DB transactionally, or reopen the exact version. Reject incompatible DBs without migration or deletion. `SCHEMA_VERSION = 3`, recorded in `PRAGMA user_version`.
+- `apply_schema(conn)` — initialize an empty DB transactionally, or reopen the exact version. Reject incompatible DBs without migration or deletion. `SCHEMA_VERSION = 4`, recorded in `PRAGMA user_version`.
 
 ## `sessions.py`
 - `CREATE_SESSIONS_TABLE` — `sessions` table: `session_id` PK, `title`, `model`,
-  `created_at`, `updated_at`, `tokens_in/out/total`, `cost`, `tools_used`
+  `created_at`, `updated_at`, `cost`, `tools_used`
   (JSON text, default `'[]'`).
 
 ## `messages.py`
@@ -29,10 +29,10 @@ independently. `apply_schema` runs the table DDLs then the indexes in order.
 - `CREATE_MODEL_CALLS_TABLE` — `model_calls` table: one row per completed model
   invocation. `session_id`, `call_key`, `kind` (CHECK `IN ('chat','title')`),
   `assistant_seq` (nullable), `prompt_tokens` / `completion_tokens` (CHECK
-  `>= 0`), `prompt_source` / `completion_source`, `recorded_at`
+  `>= 0`), `prompt_source` / `completion_source`, nullable `cached_prompt_tokens` / `reasoning_tokens`, `recorded_at`
   (default `datetime('now')`); primary key `(session_id, call_key)`;
   `FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE`.
-  Carries only token counts and provenance — no prompt text or file content.
+  Chat seq is a foreign key to messages and unique per session; title seq null. Sole token authority, totals derived, no prompt text or file content.
 
 ## `indexes.py`
 - `CREATE_INDEXES` — `idx_sessions_updated ON sessions(updated_at)`,

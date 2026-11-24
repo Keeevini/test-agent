@@ -15,7 +15,7 @@ def _utcnow() -> str:
 
 @dataclass
 class SessionMeta:
-    """Metadata for a single session, mirroring the sessions table row."""
+    """Session metadata projection, including token totals derived from the ledger."""
 
     session_id: str
     title: str = "Untitled Session"

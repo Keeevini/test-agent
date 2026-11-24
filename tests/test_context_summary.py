@@ -334,8 +334,8 @@ class BuildContextSummaryTests(TestCase):
         )
         self.assertEqual(result["session_lifetime"]["source"], "none")
 
-    def test_lifetime_source_mixed_legacy(self):
-        """meta.tokens_total != sum(calls) → mixed_legacy."""
+    def test_lifetime_uses_ledger_not_meta(self):
+        """Only the ledger contributes to the lifetime view."""
         meta = _meta(tokens_in=999, tokens_out=999, tokens_total=1998)
         calls = [
             {"session_id": "s1", "call_key": "chat:1", "kind": "chat",
@@ -347,7 +347,8 @@ class BuildContextSummaryTests(TestCase):
             meta, [], calls,
             limit=16384, model="local", tool_specs=[],
         )
-        self.assertEqual(result["session_lifetime"]["source"], "mixed_legacy")
+        self.assertEqual(result["session_lifetime"]["source"], "provider")
+        self.assertEqual(result["session_lifetime"]["tokens_total"], 150)
 
     def test_breakdown_reconciliation_invariant(self):
         """Category sums always equal used_tokens."""
@@ -418,8 +419,7 @@ class ContextEndpointTests(TestCase):
             try:
                 store.create("s1", title="Test")
                 store.append_message("s1", "user", "hello")
-                store.append_message("s1", "assistant", "hi")
-                store.record_model_call("s1", "chat:1", "chat", 1,
+                store.append_assistant_with_usage("s1", {"role": "assistant", "content": "hi"},
                                         {"prompt_tokens": 100, "completion_tokens": 20,
                                          "prompt_source": "provider",
                                          "completion_source": "provider"})

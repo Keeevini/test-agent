@@ -225,18 +225,11 @@ def _reconcile_loaded_files(
 
 
 def _lifetime_source(
-    meta,
     calls: list[dict],
 ) -> str:
     """Determine lifetime provenance label."""
     if not calls:
         return "none"
-    sum_calls = sum(
-        (c.get("prompt_tokens", 0) + c.get("completion_tokens", 0))
-        for c in calls
-    )
-    if meta.tokens_total != sum_calls:
-        return "mixed_legacy"
     all_provider = all(
         c.get("prompt_source") == "provider"
         and c.get("completion_source") == "provider"
@@ -366,11 +359,13 @@ def build_context_summary(
     }
 
     # --- Lifetime provenance ------------------------------------------
-    lifetime_source = _lifetime_source(meta, calls)
+    lifetime_source = _lifetime_source(calls)
+    lifetime_in = sum(c.get("prompt_tokens", 0) for c in calls)
+    lifetime_out = sum(c.get("completion_tokens", 0) for c in calls)
     session_lifetime = {
-        "tokens_in": meta.tokens_in,
-        "tokens_out": meta.tokens_out,
-        "tokens_total": meta.tokens_total,
+        "tokens_in": lifetime_in,
+        "tokens_out": lifetime_out,
+        "tokens_total": lifetime_in + lifetime_out,
         "source": lifetime_source,
     }
 

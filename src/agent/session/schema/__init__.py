@@ -14,7 +14,7 @@ from .model_calls import CREATE_MODEL_CALLS_TABLE
 from .sessions import CREATE_SESSIONS_TABLE
 from .indexes import CREATE_INDEXES
 
-SCHEMA_VERSION: int = 3
+SCHEMA_VERSION: int = 4
 
 
 def apply_schema(conn) -> None:

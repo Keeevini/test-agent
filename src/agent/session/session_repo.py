@@ -9,7 +9,6 @@ independently of message storage.
 from __future__ import annotations
 
 import json
-import sqlite3
 from typing import Any
 
 from .models import SessionMeta, _utcnow
@@ -40,51 +39,35 @@ class SessionsRepository:
             self._conn.commit()
         return self.get_session(session_id)
 
+    def _select_metadata(self, selection: str, params: tuple) -> list[SessionMeta]:
+        """Aggregate only the selected session page; ledger is the token authority."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"WITH selected AS ({selection}) "
+                "SELECT s.*, COALESCE(SUM(c.prompt_tokens), 0) AS tokens_in, "
+                "COALESCE(SUM(c.completion_tokens), 0) AS tokens_out, "
+                "COALESCE(SUM(c.prompt_tokens + c.completion_tokens), 0) AS tokens_total "
+                "FROM selected s LEFT JOIN model_calls c ON c.session_id = s.session_id "
+                "GROUP BY s.session_id ORDER BY s.updated_at DESC, s.session_id", params,
+            ).fetchall()
+        return [SessionMeta.from_row(dict(row)) for row in rows]
+
     def get_session(self, session_id: str) -> SessionMeta | None:
-        """Return session metadata or None if not found."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return SessionMeta.from_row(dict(row))
+        rows = self._select_metadata("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+        return rows[0] if rows else None
 
-    def list_sessions(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[SessionMeta]:
-        """Return sessions ordered by most recently updated first."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM sessions ORDER BY updated_at DESC "
-                "LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-        return [SessionMeta.from_row(dict(r)) for r in rows]
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> list[SessionMeta]:
+        return self._select_metadata(
+            "SELECT * FROM sessions ORDER BY updated_at DESC, session_id LIMIT ? OFFSET ?", (limit, offset),
+        )
 
-    def search_sessions(
-        self,
-        query: str,
-        limit: int = 50,
-    ) -> list[SessionMeta]:
-        """Search sessions by title, session_id, or model.
-
-        Matches case-insensitively using SQL LIKE.
-        """
+    def search_sessions(self, query: str, limit: int = 50) -> list[SessionMeta]:
         like = f"%{query}%"
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM sessions "
-                "WHERE title LIKE ? COLLATE nocase "
-                "OR session_id LIKE ? COLLATE nocase "
-                "OR model LIKE ? COLLATE nocase "
-                "ORDER BY updated_at DESC LIMIT ?",
-                (like, like, like, limit),
-            ).fetchall()
-        return [SessionMeta.from_row(dict(r)) for r in rows]
+        return self._select_metadata(
+            "SELECT * FROM sessions WHERE title LIKE ? COLLATE nocase "
+            "OR session_id LIKE ? COLLATE nocase OR model LIKE ? COLLATE nocase "
+            "ORDER BY updated_at DESC, session_id LIMIT ?", (like, like, like, limit),
+        )
 
     def update_title(self, session_id: str, title: str) -> None:
         now = _utcnow()
@@ -111,14 +94,12 @@ class SessionsRepository:
     def update_usage(
         self,
         session_id: str,
-        tokens_in: int = 0,
-        tokens_out: int = 0,
         cost: float = 0.0,
         tools_used: list[str] | None = None,
     ) -> None:
         """Atomically accumulate usage counters for a session.
 
-        All parameters are additive. If ``tools_used`` is provided,
+        Token totals are not writable here. If ``tools_used`` is provided,
         the tool names are merged into the existing set (no duplicates).
         """
         now = _utcnow()
@@ -147,15 +128,11 @@ class SessionsRepository:
 
             self._conn.execute(
                 "UPDATE sessions SET "
-                "tokens_in = tokens_in + ?, "
-                "tokens_out = tokens_out + ?, "
-                "tokens_total = tokens_total + ?, "
                 "cost = cost + ?, "
                 "tools_used = ?, "
                 "updated_at = ? "
                 "WHERE session_id = ?",
-                (tokens_in, tokens_out, tokens_in + tokens_out, cost,
-                 new_tools, now, session_id),
+                (cost, new_tools, now, session_id),
             )
             self._conn.commit()
 
@@ -172,81 +149,43 @@ class SessionsRepository:
     # Per-model-call usage ledger
     # ------------------------------------------------------------------
 
-    def record_model_call(
-        self,
-        session_id: str,
-        call_key: str,
-        kind: str,
-        assistant_seq: int | None,
-        usage: dict[str, Any],
-    ) -> bool:
-        """Record one completed model invocation in the ``model_calls`` ledger.
+    @staticmethod
+    def _validate_model_usage(usage: dict[str, Any]) -> tuple:
+        required = (usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        sources = (usage.get("prompt_source"), usage.get("completion_source"))
+        details = (usage.get("cached_prompt_tokens"), usage.get("reasoning_tokens"))
+        if any(type(v) is not int or v < 0 for v in required):
+            raise ValueError("usage token counts must be non-negative ints")
+        if any(v not in ("provider", "estimated") for v in sources):
+            raise ValueError("invalid usage provenance")
+        if any(v is not None and (type(v) is not int or v < 0) for v in details):
+            raise ValueError("invalid optional usage token count")
+        return (*required, *sources, *details)
 
-        Idempotent per ``(session_id, call_key)``: a duplicate key is ignored
-        and the lifetime ``sessions`` counters are incremented **only** when a
-        row is actually inserted, so repeated recordings never double count.
-        A missing session (foreign-key) is a graceful no-op returning ``False``
-        — it never recreates the session.
-
-        ``usage`` is the finalized provider-usage dict from
-        ``ModelClient.stream`` carrying ``prompt_tokens`` / ``completion_tokens``
-        (ints >= 0) and ``prompt_source`` / ``completion_source`` (strings).
-        """
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
-        prompt_source = usage.get("prompt_source")
-        completion_source = usage.get("completion_source")
-        # Validate before touching the connection.
-        for value in (prompt_tokens, completion_tokens):
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError("usage token counts must be non-negative ints")
-        if not isinstance(prompt_source, str) or not isinstance(completion_source, str):
-            raise ValueError("usage sources must be strings")
-
+    def _insert_model_call_locked(self, session_id, call_key, kind, assistant_seq, values) -> bool:
+        """Caller owns lock and transaction. Only duplicate call_key is ignored."""
         now = _utcnow()
-        with self._lock:
-            try:
-                cur = self._conn.execute(
-                    "INSERT OR IGNORE INTO model_calls "
-                    "(session_id, call_key, kind, assistant_seq, "
-                    " prompt_tokens, completion_tokens, "
-                    " prompt_source, completion_source, recorded_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        session_id,
-                        call_key,
-                        kind,
-                        assistant_seq,
-                        prompt_tokens,
-                        completion_tokens,
-                        prompt_source,
-                        completion_source,
-                        now,
-                    ),
-                )
-                inserted = cur.rowcount > 0
-            except sqlite3.IntegrityError:
-                # FK violation: the session no longer exists.
-                inserted = False
-            if inserted:
-                # Increment lifetime counters exactly once, only on insert.
-                self._conn.execute(
-                    "UPDATE sessions SET "
-                    "tokens_in = tokens_in + ?, "
-                    "tokens_out = tokens_out + ?, "
-                    "tokens_total = tokens_total + ?, "
-                    "updated_at = ? "
-                    "WHERE session_id = ?",
-                    (
-                        prompt_tokens,
-                        completion_tokens,
-                        prompt_tokens + completion_tokens,
-                        now,
-                        session_id,
-                    ),
-                )
-            self._conn.commit()
-            return inserted
+        cur = self._conn.execute(
+            "INSERT INTO model_calls (session_id, call_key, kind, assistant_seq, "
+            "prompt_tokens, completion_tokens, prompt_source, completion_source, "
+            "cached_prompt_tokens, reasoning_tokens, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, call_key) DO NOTHING",
+            (session_id, call_key, kind, assistant_seq, *values, now),
+        )
+        if cur.rowcount:
+            self._conn.execute("UPDATE sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
+        return bool(cur.rowcount)
+
+    def record_model_call(self, session_id: str, call_key: str, kind: str,
+                          assistant_seq: int | None, usage: dict[str, Any]) -> bool:
+        """Title-only write. Chat usage is atomic with append_assistant_with_usage."""
+        if kind != "title" or assistant_seq is not None or call_key != "title":
+            raise ValueError("Chat calls must be recorded atomically with their assistant message")
+        values = self._validate_model_usage(usage)
+        with self._lock, self._conn:
+            if not self._conn.execute("SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)).fetchone():
+                return False
+            return self._insert_model_call_locked(session_id, call_key, kind, assistant_seq, values)
 
     def list_model_calls(self, session_id: str) -> list[dict[str, Any]]:
         """Return the session's ``model_calls`` ledger rows, oldest first.

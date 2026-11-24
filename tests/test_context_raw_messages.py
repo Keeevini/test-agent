@@ -131,16 +131,16 @@ class RawMessageShapeTests(TestCase):
                 assistant = {
                     "role": "assistant",
                     "content": "Hi there",
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
                     "time": {"created": 1795461000000, "completed": 1795461001000},
                 }
-                store.append_message("s1", "assistant", assistant)
+                usage = {"prompt_tokens": 10, "completion_tokens": 2, "prompt_source": "provider", "completion_source": "provider", "cached_prompt_tokens": None, "reasoning_tokens": 0}
+                store.append_assistant_with_usage("s1", assistant, usage)
                 page = store.get_raw_message_page("s1", 0, 20)
                 msg = page["messages"][0]
                 self.assertEqual(msg["role"], "assistant")
                 self.assertEqual(msg["raw"]["role"], "assistant")
                 self.assertEqual(msg["raw"]["content"], "Hi there")
-                self.assertEqual(msg["raw"]["usage"], {"prompt_tokens": 10, "completion_tokens": 2})
+                self.assertEqual(msg["raw"]["usage"], usage)
                 self.assertEqual(msg["created_ms"], 1795461000000)
             finally:
                 store.close()

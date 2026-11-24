@@ -207,19 +207,12 @@ class LocalAgent:
 
                 # Step A: Initialize step activity and persist the assistant row.
                 step_activity = {"version": 1, "calls": {}, "parts": parts}
-                assistant_seq = self.sessions.append_message(
-                    session_id,
-                    "assistant",
-                    assistant_message,
-                    activity=step_activity,
+                usage = assistant_message.pop("usage")
+                assistant_seq = self.sessions.append_assistant_with_usage(
+                    session_id, assistant_message, usage, activity=step_activity,
                 )
                 last_assistant_seq = assistant_seq
                 last_step_activity = step_activity
-                # The completed model call is durable before any tool or SSE yield.
-                self.sessions.record_model_call(
-                    session_id, f"chat:{assistant_seq}", "chat",
-                    assistant_seq, assistant_message["usage"],
-                )
 
                 # Yield the last model_part_end after persistence so the
                 # frontend can finalize the final segment.
@@ -465,6 +458,12 @@ class LocalAgent:
         garbage-collect it mid-run.
         """
         if session_id in self._titled:
+            return
+        meta = self.sessions.get(session_id)
+        if meta is None or meta.title != "Untitled Session" or any(
+            row["kind"] == "title" for row in self.sessions.list_model_calls(session_id)
+        ):
+            self._titled.add(session_id)
             return
         self._titled.add(session_id)
         task = asyncio.create_task(self._generate_title(session_id, messages))

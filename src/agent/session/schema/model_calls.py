@@ -20,8 +20,14 @@ CREATE TABLE IF NOT EXISTS model_calls (
     completion_tokens INTEGER NOT NULL CHECK (completion_tokens >= 0),
     prompt_source TEXT NOT NULL,
     completion_source TEXT NOT NULL,
+    cached_prompt_tokens INTEGER CHECK (cached_prompt_tokens >= 0),
+    reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+
     recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (session_id, call_key),
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    UNIQUE (session_id, assistant_seq),
+    CHECK ((kind = 'chat' AND assistant_seq IS NOT NULL) OR (kind = 'title' AND assistant_seq IS NULL)),
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+    FOREIGN KEY (session_id, assistant_seq) REFERENCES messages(session_id, seq) ON DELETE CASCADE
 )
 """

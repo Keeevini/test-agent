@@ -61,6 +61,9 @@ class SessionStore:
             session_id, role, content, activity=activity, tool_call_id=tool_call_id
         )
 
+    def append_assistant_with_usage(self, session_id: str, content: dict, usage: dict, *, activity=None) -> int:
+        return self._store.append_assistant_with_usage(session_id, content, usage, activity=activity)
+
     def update_message_content(self, session_id: str, seq: int, content: Any) -> None:
         """Update the content of an existing message by its sequence number."""
         self._store.update_message_content(session_id, seq, content)
