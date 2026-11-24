@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('repo', type=Path, help='Repository root (only src/static is read)')
-parser.add_argument('mode', nargs='?', default='fixed', choices=['original','lifecycle','raw','layout','fixed'])
+parser.add_argument('mode', nargs='?', default='fixed', choices=['original','lifecycle','raw','layout','fixed','combined'])
 parser.add_argument('--browser', default=os.environ.get('CHROMIUM_PATH') or shutil.which('chromium') or shutil.which('chromium-browser'), help='Chromium executable; omit to use Playwright browser')
 args = parser.parse_args()
 ROOT = args.repo.resolve()
@@ -222,6 +222,144 @@ def check_layout(browser):
     page.set_viewport_size({'width':800,'height':800}); assert len(page.locator('.layout').evaluate('(e)=>getComputedStyle(e).gridTemplateColumns').split())==1
     assert not errors; page.close(); print('layout: desktop 3 columns, tablet 2, mobile 1, tooltip inside viewport: PASS')
 
+def check_combined(browser):
+    """Run actual bootstrap, conversation, ring and inspector in one document."""
+    page, errors = boot(browser)
+    wait_count(page, '1.6k')
+    page.locator('#contextIndicator').click()
+    wait_raw(page, 'Showing 20 of 23')
+    # Extend only this fixture's transport; existing lifecycle gates are unchanged.
+    page.evaluate(r'''() => {
+      const original = window.fetch;
+      const text = '<img src=x onerror=alert(1)> synthetic';
+      const readArgs = {path:'fixture.txt'}, writeArgs = {path:'never.txt',content:'x'};
+      const tool = (id,name,args) => ({id,type:'function',function:{name,arguments:JSON.stringify(args)}});
+      const rows = [
+        {role:'user',content:'combined fixture'},
+        {role:'assistant',content:'before',reasoning_content:'think',usage:{prompt_tokens:100,completion_tokens:10},
+          tool_calls:[tool('r','read_file',readArgs),tool('w','write_file',writeArgs)],
+          activity:{version:1,parts:[{kind:'reasoning',chars:5,duration_ms:1000},{kind:'content',chars:6}],
+            calls:{r:{requested:true},w:{requested:true,approval:{approval_id:'p',status:'denied'}}}}},
+        {role:'tool',tool_call_id:'r',content:text,
+          activity:{version:1,ok:true,meta:{lines:1,bytes:text.length}}},
+        {role:'tool',tool_call_id:'w',content:'Denied',
+          activity:{version:1,ok:false,meta:{}}},
+        {role:'assistant',content:'after',activity:{version:1,parts:[{kind:'content',chars:5}],calls:{}}}
+      ];
+      const aliases = {read_file:'Read file',write_file:'Write file'};
+      const start = [
+        {type:'status',text:'Model turn 1'},
+        {type:'reasoning_delta',text:'think'}, {type:'model_part_end',kind:'reasoning',duration_ms:1000},
+        {type:'content_delta',text:'before'}, {type:'model_part_end',kind:'content'},
+        {type:'tool_call',tool_call_id:'r',name:'read_file',arguments:readArgs,alias:aliases.read_file},
+        {type:'tool_result',tool_call_id:'r',name:'read_file',ok:true,result:text,meta:{lines:1,bytes:text.length},alias:aliases.read_file},
+        {type:'tool_call',tool_call_id:'w',name:'write_file',arguments:writeArgs,alias:aliases.write_file},
+        {type:'approval_required',approval_id:'p',tool_call_id:'w',name:'write_file',arguments:writeArgs,alias:aliases.write_file},
+        {type:'approval_decision',approval_id:'p',tool_call_id:'w',name:'write_file',status:'denied',alias:aliases.write_file},
+        {type:'tool_result',tool_call_id:'w',name:'write_file',ok:false,result:'Denied',meta:{},alias:aliases.write_file},
+        // Deliberately wrong numeric SSE payload: only the GET can paint the ring.
+        {type:'context',tokens:9999,max_tokens:10000,percentage:99.99},
+      ];
+      const tail = [{type:'status',text:'Model turn 2'},{type:'content_delta',text:'after'},
+        {type:'model_part_end',kind:'content'},{type:'context',tokens:9999,max_tokens:10000,percentage:99.99},{type:'done'}];
+      const encode = events => new TextEncoder().encode(events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join(''));
+      const json = value => new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+      let active=false;
+      window.fetch = async (url,opts={}) => {
+        const u = new URL(url,'https://fixture.invalid');
+        const response = await original(url,opts);
+        if (u.pathname==='/api/chat') {
+          active=true;
+          return new Response(new ReadableStream({start(controller){
+            controller.enqueue(encode(start));
+            fixture.finishCombined=()=>{controller.enqueue(encode(tail));controller.close()};
+          }}),{headers:{'Content-Type':'text/event-stream'}});
+        }
+        if (!active || !response.ok) return response;
+        if (u.pathname==='/api/sessions/A/messages') return json({messages:rows,tool_aliases:aliases});
+        if (u.pathname==='/api/sessions/A/context') {
+          const data=await response.json();
+          return json({...data,session_title:'Fixture name',created_at:'2026-01-01 00:00:00',updated_at:'2026-01-02 00:00:00',message_count:5,assistant_message_count:2,user_message_count:1,
+            session_lifetime:{tokens_total:4500,source:'provider'},breakdown_source:'tokenizer_assisted',breakdown_sources:{loaded_files:'tokenized',tool_usage:'mixed'},
+            attributed_tokens:3000,attribution_difference:-300,breakdown:{loaded_files:100,tool_usage:200,other:2700,available:61300},
+            loaded_files:[{path:'fixture.txt',tokens:100,occurrences:1,source:'tokenized'}],tool_usage_details:[{name:'read_file',tokens:200,call_tokens:150,result_tokens:0,definition_tokens:50,calls:1,source:'mixed'}]});
+        }
+        if (u.pathname==='/api/sessions/A/context/messages') {
+          const offset=Number(u.searchParams.get('offset')), limit=Number(u.searchParams.get('limit'));
+          const messages=rows.slice(offset,offset+limit).map((raw,i)=>({seq:offset+i,role:raw.role,raw,tool_name:raw.tool_call_id==='r'?'read_file':raw.tool_call_id==='w'?'write_file':undefined}));
+          return json({session_id:'A',offset,limit,total:rows.length,has_more:offset+messages.length<rows.length,messages});
+        }
+        return response;
+      };
+    }''')
+    holds(page, ['/api/sessions/A/context'])
+    page.locator('#prompt').fill('combined fixture')
+    page.locator('#sendButton').click()
+    wait_pending(page, '/api/sessions/A/context')  # debounced SSE while stream is still open
+    wait_count(page, '1.6k')
+    assert page.locator('#messages .approval-state').inner_text() == 'Denied'
+    assert page.locator('#messages .approval-controls button').count() == 0
+    assert page.locator('#messages .group-count').all_text_contents() == ['×1','×1']
+    holds(page, [])
+    release(page, '/api/sessions/A/context')
+    wait_count(page, '2.7k')
+    wait_raw(page, 'Showing 5 of 5')
+    page.evaluate('fixture.finishCombined()')
+    page.wait_for_function("document.querySelector('#sendButton').textContent.includes('Send')")
+    wait_raw(page, 'Showing 5 of 5')
+    # Final refresh, not the numeric SSE payload, owns the panel and ring.
+    wait_count(page, '2.7k')
+    page.locator('.context-detail-files:not(.context-detail-tools) summary').click()
+    assert page.locator('.context-detail-files:not(.context-detail-tools) .context-detail-files-path').inner_text() == 'fixture.txt'
+    assert '4,500' in page.locator('.context-detail-lifetime').inner_text()
+    assert 'Fixture name' in page.locator('.context-detail-session-info').inner_text()
+    assert 'Tokenizer-assisted' in page.locator('.context-detail-source').inner_text()
+    assert '300 more' in page.locator('.context-detail-difference').inner_text()
+    page.locator('.context-detail-tools summary').click()
+    assert 'read_file' in page.locator('.context-detail-tool-row').inner_text()
+    assert 'calls 150' in page.locator('.context-detail-tool-components').inner_text()
+    tool_row = page.locator('.context-detail-raw-row').nth(2)
+    tool_row.locator('summary').click()
+    page.wait_for_function("document.querySelectorAll('.context-detail-raw-row code')[2]?.textContent.includes('tool_call_id')")
+    raw = tool_row.locator('code').inner_text()
+    assert '"tool_call_id": "r"' in raw and '"context_meta"' not in raw and '"activity"' in raw
+    assert '<img src=x' in raw and tool_row.locator('img').count() == 0
+    import json
+    parsed = json.loads(raw)
+    assert parsed == {'role':'tool','tool_call_id':'r','content':'<img src=x onerror=alert(1)> synthetic','activity':{'version':1,'ok':True,'meta':{'lines':1,'bytes':len('<img src=x onerror=alert(1)> synthetic')}}}
+    assert tool_row.locator('.context-json-key').count() > 0 and tool_row.locator('.context-json-string').count() > 0
+    assert tool_row.locator('.context-detail-raw-role').evaluate('(e)=>getComputedStyle(e).color') == page.locator('.activity-card.tool .activity-card-header').first.evaluate('(e)=>getComputedStyle(e).color')
+    # Replay uses the same IDs, counts, outcomes and result bodies with no POST.
+    def transcript():
+        # Live reasoning is deliberately lazy while collapsed; compare visible
+        # expanded content, not an unrendered hidden body.
+        card = page.locator('#messages .activity-card.reasoning.collapsed .activity-card-header')
+        if card.count():
+            card.click()
+        return page.locator('#messages').evaluate('''root => [...root.children].filter(e=>e.matches('.message,.activity-card')).map(e=>({
+          type:e.classList.contains('group')?'group':e.classList.contains('reasoning')?'reasoning':e.classList.contains('user')?'user':'assistant',
+          text:e.classList.contains('reasoning')?e.querySelector('.activity-card-body').textContent:
+               e.classList.contains('group')?[...e.querySelectorAll('.group-count,.activity-card-body,.approval-state')].map(n=>n.textContent).join('|'):
+               e.querySelector('.message-body')?.textContent||''}))''')
+    live = transcript()
+    assert any('after' == item['text'] for item in live)
+    page.locator('.session-item[data-session-id=B]').click()
+    wait_count(page, '3.4k')
+    wait_raw(page, 'No stored messages · Showing 0 of 0')
+    assert not page.locator('#messages .group-count').count()
+    page.locator('.session-item[data-session-id=A]').click()
+    wait_count(page, '2.7k')
+    wait_raw(page, 'Showing 5 of 5')
+    page.wait_for_function("document.querySelectorAll('#messages .group-count').length===2")
+    assert transcript() == live, (live, transcript())
+    assert page.locator('#messages .approval-controls button').count() == 0
+    assert not requests(page, '/api/approval')
+    assert len(requests(page, '/api/chat')) == 1
+    assert page.locator('#contextPanel').is_visible()
+    assert not errors, errors
+    page.close()
+    print('combined: actual bootstrap + transcript parity + snapshot authority + raw metadata + session switch: PASS')
+
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=args.browser,headless=True)
     print('Chromium',browser.version)
@@ -230,4 +368,5 @@ with sync_playwright() as p:
         if MODE in ('lifecycle','fixed'):check_lifecycle(browser)
         if MODE in ('raw','fixed'):check_raw(browser)
         if MODE in ('layout','fixed'):check_layout(browser)
+        if MODE=='combined':check_combined(browser)
     browser.close()

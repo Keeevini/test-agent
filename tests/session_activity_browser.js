@@ -66,8 +66,8 @@ async (stage) => {
     assert(controls2.querySelectorAll('button').length === 2, 'retry buttons present');
     assert([...controls2.querySelectorAll('button')].every(b => !b.disabled), 'retry buttons enabled');
     assert(controls2.querySelector('.approval-state.error'), 'error status shown');
-    respond({ ok: true, status: 200, json: async () => ({ok:true}) });
     controls2.querySelector('button').click();
+    respond({ ok: true, status: 200, json: async () => ({ok:true}) });
     await new Promise(resolve => setTimeout(resolve, 0));
     assert(controls2.querySelectorAll('button').length === 0, 'retry terminal buttons removed');
     assert(controls2.textContent.trim() === 'Approved', 'retry terminal label');
@@ -500,7 +500,7 @@ async (stage) => {
     renderer.break();
     messages.el.innerHTML = '';
     const event = { approval_id: 'ap1', tool_call_id: 'a6', name: 'write_file', alias: 'Write file', arguments: { path: 'f.txt' } };
-    const handle = addApproval(event, { messagesView, formatToolArgs, parent: messages.el, historical: true, displayName: toolLabel(event.name, event.alias) });
+    const handle = addApproval(event, { messagesView: messages, formatToolArgs, parent: messages.el, historical: true, displayName: toolLabel(event.name, event.alias) });
     const approvalCard = messages.el.querySelector('.activity-card.approval');
     assert(approvalCard, 'alias: approval card created');
     assert(approvalCard.querySelector('.activity-card-header').textContent.includes('Write file'), 'alias: approval header shows alias');
@@ -511,7 +511,7 @@ async (stage) => {
     groups = messages.el.querySelectorAll('.activity-card.group');
     const resultCard = groups[0]?.querySelector('.activity-card.result');
     assert(resultCard, 'alias: result card in group');
-    assert(resultCard.querySelector('.activity-card-header')?.textContent.includes('Show folder structure') || true, 'alias: result uses alias in title');
+    assert(resultCard.querySelector('.activity-card-header')?.textContent.includes('Show folder structure'), 'alias: result uses alias in title');
 
     renderer.break();
     messages.el.innerHTML = '';
