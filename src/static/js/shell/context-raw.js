@@ -3,10 +3,30 @@
 //
 // Security: raw message data is untrusted local content. All message content
 // is rendered with textContent only; never innerHTML. JSON is pretty-printed
-// via JSON.stringify into <pre><code> textContent.
+// via JSON.stringify into <pre><code> using inert text nodes and spans.
 //
 // The inspector never calls sessions.activate, changes selected session ID,
 // starts/stops a chat turn, or modifies the ring.
+
+// Preserve every character of the pretty-printed JSON. Only color lexical tokens.
+function renderJson(code, raw) {
+  const text = JSON.stringify(raw, null, 2);
+  const pattern = /("(?:\\.|[^"\\])*")(?=\s*:)|"(?:\\.|[^"\\])*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
+  const fragment = document.createDocumentFragment();
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+    const token = document.createElement('span');
+    const kind = match[1] ? 'key' : match[0][0] === '"' ? 'string'
+      : /^(true|false|null)$/.test(match[0]) ? 'literal' : 'number';
+    token.className = `context-json-${kind}`;
+    token.textContent = match[0];
+    fragment.appendChild(token);
+    cursor = match.index + match[0].length;
+  }
+  fragment.appendChild(document.createTextNode(text.slice(cursor)));
+  code.replaceChildren(fragment);
+}
 
 export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
   let disposed = false;
@@ -120,7 +140,7 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
       if (!details.open || jsonRendered) return;
       jsonRendered = true;
       try {
-        code.textContent = JSON.stringify(raw, null, 2);
+        renderJson(code, raw);
       } catch {
         code.textContent = 'Unable to format stored message';
       }

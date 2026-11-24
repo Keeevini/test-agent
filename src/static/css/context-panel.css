@@ -302,7 +302,7 @@ details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
 }
 
 .context-detail-raw-role--tool {
-  color: var(--good);
+  color: var(--info);
 }
 
 .context-detail-raw-seq {
@@ -318,7 +318,7 @@ details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
 
 .context-detail-raw-tool {
   font-size: 0.72rem;
-  color: var(--muted);
+  color: var(--info);
   font-style: italic;
 }
 
@@ -357,3 +357,8 @@ details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
 .context-detail-segment--unattributed { background: repeating-linear-gradient(135deg, var(--muted-2) 0 3px, var(--panel) 3px 6px); }
 .context-detail-tool-row { display: grid; grid-template-columns: 1fr auto; gap: .15rem .5rem; padding: .3rem .5rem; font-size: .75rem; }
 .context-detail-tool-components { grid-column: 1 / -1; overflow-wrap: anywhere; color: var(--muted); }
+
+.context-json-key { color: var(--info); }
+.context-json-string { color: var(--good); }
+.context-json-number { color: var(--accent); }
+.context-json-literal { color: var(--accent-2); }
