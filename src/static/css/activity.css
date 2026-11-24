@@ -37,12 +37,19 @@
 .approve-button { background: color-mix(in srgb, var(--good) 20%, var(--panel)); color: #b8eccd; }
 .deny-button { background: color-mix(in srgb, var(--bad) 20%, var(--panel)); color: #ffc1c1; }
 .approval-state { color: var(--muted); font-size: 12px; margin-left: auto; }
-.context-indicator { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; transition: border-color 0.3s ease; }
-.context-label { font-size: 11px; font-weight: 530; }
-.context-bar { width: 90px; height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
-.context-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--good); transition: width 0.3s ease, background-color 0.3s ease; }
-.context-indicator.caution .context-fill { background: var(--warn); }
-.context-indicator.warning .context-fill { background: var(--warn); }
-.context-indicator.danger .context-fill { background: var(--bad); }
+/* Context-usage ring button. The fill circle's stroke-dashoffset is driven by
+   JS (status.js): dashoffset = circumference * (1 - percent/100). The count is
+   the formatted used-token count shown to the right of the ring. The themed
+   tooltip is shown only on hover/focus and never intercepts pointer events. */
+.context-indicator { position: relative; display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; cursor: pointer; transition: border-color 0.3s ease, color 0.3s ease; }
+.context-indicator:hover, .context-indicator:focus-visible { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--text); }
 .context-indicator.danger { border-color: color-mix(in srgb, var(--bad) 50%, var(--border)); }
-.context-pct { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.context-ring { width: 22px; height: 22px; flex: 0 0 auto; }
+.context-ring-track { fill: none; stroke: var(--border); stroke-width: 2; }
+.context-ring-fill { fill: none; stroke: var(--good); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 56.52; stroke-dashoffset: 56.52; transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease; }
+.context-indicator.caution .context-ring-fill { stroke: var(--warn); }
+.context-indicator.warning .context-ring-fill { stroke: var(--warn); }
+.context-indicator.danger .context-ring-fill { stroke: var(--bad); }
+.context-count { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.context-tooltip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 11px; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s ease; }
+.context-indicator:hover .context-tooltip, .context-indicator:focus-visible .context-tooltip { opacity: 1; }

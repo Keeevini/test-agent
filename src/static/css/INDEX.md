@@ -9,16 +9,17 @@ preserved verbatim across these files, and the cascade order is retained
 |---|---|---|
 | `tokens.css` | `:root` theme variables (OpenCode dark palette, fonts). | All colors/fonts are defined here. |
 | `base.css` | Reset, focus ring, body, `ghost-button`/`icon-button`. | |
-| `layout.css` | App shell, topbar, badge, layout grid, chat panel. | |
+| `layout.css` | App shell, topbar, badge, layout grid, chat panel, context sidebar. | |
 | `sessions.css` | Sidebar, session list, rows, delete button, drawer. | |
 | `conversation.css` | Messages, empty state, examples, stream cursor, Markdown, composer. | |
-| `activity.css` | Activity cards, reasoning/tool/result/approval, context indicator. | |
+| `activity.css` | Activity cards, reasoning/tool/result/approval, context ring. | |
 | `dialogs.css` | Confirmation dialog (themed, non-native). | |
-| `responsive.css` | Mobile drawer, reduced motion, print. | |
+| `context-panel.css` | Context-window detail panel (bar, legend, files, system prompt). | Uses `tokens.css` variables only. |
+| `responsive.css` | Mobile drawer, context drawer, reduced motion, print. | |
 
 ## Import order (cascade contract)
 `tokens.css` → `base.css` → `layout.css` → `sessions.css` → `conversation.css`
-→ `activity.css` → `dialogs.css` → `responsive.css`.
+→ `activity.css` → `dialogs.css` → `context-panel.css` → `responsive.css`.
 
 This order is load-bearing: earlier sheets have lower precedence in ties, and
 `responsive.css` (mobile drawer, reduced motion, print) must stay last so its

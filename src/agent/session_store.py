@@ -105,3 +105,9 @@ class SessionStore:
     def list_model_calls(self, session_id: str) -> list[dict[str, Any]]:
         """Return the session's model-call ledger rows, oldest first."""
         return self._store.list_model_calls(session_id)
+
+    def get_raw_message_page(
+        self, session_id: str, offset: int = 0, limit: int = 20
+    ) -> dict:
+        """Return a bounded, read-only page of raw stored messages."""
+        return self._store.get_raw_message_page(session_id, offset, limit)

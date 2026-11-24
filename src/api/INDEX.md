@@ -41,6 +41,11 @@ dependencies injected (the `agent`, `approvals`, and `sessions` objects), so
   - `GET /api/sessions/{session_id}/messages` — `get_messages` → `{"messages": [...]}`.
   - `GET /api/sessions/{session_id}/context` — `get_context`; read-only context
     analytics via `build_context_summary`; 404 when session absent.
+  - `GET /api/sessions/{session_id}/context/messages?offset&limit` —
+    `get_context_raw_messages`; read-only paginated raw messages via
+    `sessions.get_raw_message_page`. `offset` ge=0, `limit` ge=1 le=50
+    (default 20). Returns `{session_id, offset, limit, total, has_more,
+    messages}`. 404 when session absent.
 - `serialize_session(meta) -> dict` — single projection of a session metadata
   record onto its public shape. Keys (all preserved): `session_id`, `title`,
   `model`, `created_at`, `updated_at`, `tokens_in`, `tokens_out`, `tokens_total`,

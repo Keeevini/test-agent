@@ -22,13 +22,15 @@
       </div>
       <div class="topbar-actions">
         <button id="sidebarToggle" class="ghost-button sidebar-toggle" aria-label="Toggle session list" aria-expanded="false">☰</button>
-        <div class="context-indicator" id="contextIndicator" title="Context usage">
-          <span class="context-label">Context</span>
-          <div class="context-bar">
-            <div class="context-fill" id="contextFill"></div>
-          </div>
-          <span class="context-pct" id="contextPct">0%</span>
-        </div>
+        <button id="contextIndicator" class="context-indicator" type="button"
+                aria-label="Toggle Context Window" aria-controls="contextPanel" aria-expanded="false">
+          <svg class="context-ring" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <circle class="context-ring-track" cx="12" cy="12" r="9" />
+            <circle class="context-ring-fill" id="contextRingFill" cx="12" cy="12" r="9" />
+          </svg>
+          <span class="context-count" id="contextCount">0%</span>
+          <span class="context-tooltip" role="tooltip" aria-hidden="true">Toggle Context Window</span>
+        </button>
         <span id="connectionBadge" class="badge">Checking…</span>
         <button id="clearButton" class="ghost-button">New chat</button>
       </div>
@@ -75,6 +77,15 @@
           </button>
         </form>
       </section>
+      <aside id="contextPanel" class="context-sidebar" aria-label="Context window" hidden>
+        <header class="context-sidebar-header">
+          <h2 id="contextPanelTitle">Context</h2>
+          <button id="contextClose" class="ghost-button context-close" type="button"
+                  aria-label="Close Context Window" aria-controls="contextPanel">×</button>
+        </header>
+        <div id="contextPanelBody" class="context-sidebar-body" aria-live="polite">Loading context…</div>
+      </aside>
+      <div class="context-backdrop" id="contextBackdrop"></div>
 
     </main>
   </div>

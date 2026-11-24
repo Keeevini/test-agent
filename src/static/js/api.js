@@ -40,6 +40,20 @@ export async function getSessionMessages(id) {
   return r.json();
 }
 
+export async function getSessionContext(id) {
+  const r = await fetch(`/api/sessions/${encodeURIComponent(id)}/context`);
+  if (!r.ok) throw new Error(`Session context failed: HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function getContextRawMessages(id, { offset = 0, limit = 20 } = {}) {
+  const url = `/api/sessions/${encodeURIComponent(id)}/context/messages`
+    + `?offset=${encodeURIComponent(offset)}&limit=${encodeURIComponent(limit)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Context raw messages failed: HTTP ${response.status}`);
+  return response.json();
+}
+
 export async function respondToApproval(approval_id, approved) {
   const r = await fetch('/api/approval', {
     method: 'POST',

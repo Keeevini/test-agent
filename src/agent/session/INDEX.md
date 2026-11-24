@@ -53,6 +53,12 @@ public entry; the repositories and schema are maintained independently.
   as a genuine tool object (`role == 'tool'`, `content` str, `tool_call_id`
   str) are returned with the parsed object; other tool rows fall back to the
   legacy `{role: 'tool', content: raw}` shape.
+- `get_raw_message_page(session_id, offset, limit) -> dict` — read-only
+  paginated page under the store lock: `COUNT(*)` + bounded `SELECT seq, role,
+  content ... ORDER BY seq LIMIT ? OFFSET ?`. Returns `{total, offset, limit,
+  has_more, messages}` where each message is `{seq, role, created_ms, raw}` and
+  `raw` is the full `SessionMessage(...).to_dict()` dict. `created_ms` is
+  extracted from `raw.time.created` when present, else `None`.
 - `append_message(session_id, role, content) -> int` — returns the new `seq`
   (`MAX(seq)+1`); content may be a `str` (user/system) or `dict` (assistant),
   JSON-encoded. Touches the session's `updated_at`.

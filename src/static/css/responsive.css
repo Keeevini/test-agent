@@ -20,6 +20,28 @@
   }
   .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
 }
+/* Tablet/mobile: the context window becomes a fixed right-side drawer with a
+   backdrop. The `hidden` attribute keeps the aside out of flow until opened;
+   the `.context-open` class on the layout slides it in. */
+@media (max-width: 1100px) {
+  .context-sidebar {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: min(390px, 88vw);
+    z-index: 35;
+    transform: translateX(100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 24px color-mix(in srgb, #000 50%, transparent);
+  }
+  .layout.context-open .context-sidebar { transform: translateX(0); }
+  .context-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 5;
+    background: color-mix(in srgb, #000 45%, transparent);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+  }
+  .context-backdrop.open { opacity: 1; pointer-events: auto; }
+}
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
@@ -29,7 +51,7 @@
   html, body { background: #fff; color: #000; height: auto; }
   body { background: none; }
   .app-shell { height: auto; }
-  .topbar, .composer, .scroll-to-bottom, .message-copy { display: none !important; }
+  .topbar, .composer, .scroll-to-bottom, .message-copy, .context-sidebar, .context-backdrop { display: none !important; }
   .layout { display: block; }
   .messages { padding: 0; overflow: visible; max-height: none; }
   .message.assistant .message-body { max-width: none; }

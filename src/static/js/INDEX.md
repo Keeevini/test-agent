@@ -7,10 +7,10 @@ calls `fetch`.
 
 | File | Purpose | Public API | Notes |
 |---|---|---|---|
-| `api.js` | Transport-only HTTP layer | `getHealth`, `listSessions`, `createSession`, `deleteSession`, `getSessionMessages`, `respondToApproval`, `decodeSseEvents`, `streamChat` | No DOM, no state. See below. |
+| `api.js` | Transport-only HTTP layer | `getHealth`, `listSessions`, `createSession`, `deleteSession`, `getSessionMessages`, `getSessionContext`, `getContextRawMessages`, `respondToApproval`, `decodeSseEvents`, `streamChat` | No DOM, no state. See below. |
 | `conversation/` | Transcripts, activity cards, streaming | `createConversationController`, `initComposer`, message/activity renderers | See `conversation/INDEX.md`. |
 | `sessions/` | Active session state + sidebar history | `createSessionsController`, `renderSessionList`, title-scroll | See `sessions/INDEX.md`. |
-| `shell/` | Shell status, dialogs, responsive drawer | `createStatusView`, `initMobileSidebar`, `showConfirmDelete` | See `shell/INDEX.md`. |
+| `shell/` | Shell status, dialogs, responsive drawer, context window | `createStatusView`, `initMobileSidebar`, `showConfirmDelete`, `createContextWindowController`, `renderContextPanel`, `createRawMessageInspector` | See `shell/INDEX.md`. |
 
 ## `api.js` — transport
 - `getHealth() -> Promise<object>` — `GET /api/health`.
@@ -22,6 +22,11 @@ calls `fetch`.
 - `deleteSession(id) -> Promise<object>` — `DELETE /api/sessions/{id}`.
 - `getSessionMessages(id) -> Promise<{messages}>` —
   `GET /api/sessions/{id}/messages`.
+- `getSessionContext(id) -> Promise<object>` —
+  `GET /api/sessions/{id}/context`.
+- `getContextRawMessages(id, {offset, limit}) -> Promise<object>` —
+  `GET /api/sessions/{id}/context/messages?offset&limit`. Returns
+  `{session_id, offset, limit, total, has_more, messages}`.
 - `respondToApproval(approval_id, approved) -> Promise<object>` —
   `POST /api/approval`.
 - `decodeSseEvents(response) -> AsyncGenerator<object>` — incremental SSE

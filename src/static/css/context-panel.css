@@ -1,0 +1,346 @@
+/* Context-window detail panel: summary, capacity-scaled stacked bar, loaded
+   file breakdown, system prompt, and the raw-messages anchor. All colors come
+   from tokens.css; no hardcoded palette. */
+
+.context-detail-summary,
+.context-detail-system,
+.context-detail-raw {
+  margin-bottom: 1.25rem;
+}
+
+.context-detail-heading {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.context-detail-counts {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.context-detail-pct {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.context-detail-over {
+  color: var(--bad);
+  font-size: 0.75rem;
+}
+
+.context-detail-source {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--muted-2);
+}
+
+/* --- Capacity-scaled stacked bar -------------------------------------- */
+
+.context-detail-bar {
+  display: flex;
+  overflow:hidden;
+  height: 10px;
+  margin-top: 0.6rem;
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.context-detail-segment {
+  flex: 0 0 auto;
+  height: 100%;
+}
+
+/* Segment colors mirror the legend swatches. `available` is a dim track
+   shade, not a used category. */
+.context-detail-segment--previous_compaction {
+  background: var(--muted-2);
+}
+.context-detail-segment--user_input {
+  background: var(--accent-2);
+}
+.context-detail-segment--loaded_files {
+  background: var(--info);
+}
+.context-detail-segment--model_reasoning {
+  background: var(--accent);
+}
+.context-detail-segment--tool_usage {
+  background: var(--good);
+}
+.context-detail-segment--other {
+  background: var(--muted);
+}
+.context-detail-segment--available {
+  background: var(--panel-2);
+}
+
+/* --- Legend ------------------------------------------------------------ */
+
+.context-detail-legend {
+  margin-top: 0.75rem;
+}
+
+.context-detail-legend-row {
+  display: grid;
+  grid-template-columns: 12px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.context-detail-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.context-detail-swatch--previous_compaction {
+  background: var(--muted-2);
+}
+.context-detail-swatch--user_input {
+  background: var(--accent-2);
+}
+.context-detail-swatch--loaded_files {
+  background: var(--info);
+}
+.context-detail-swatch--model_reasoning {
+  background: var(--accent);
+}
+.context-detail-swatch--tool_usage {
+  background: var(--good);
+}
+.context-detail-swatch--other {
+  background: var(--muted);
+}
+.context-detail-swatch--available {
+  background: var(--panel-2);
+}
+
+.context-detail-legend-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.context-detail-legend-source {
+  font-size: 0.72rem;
+  color: var(--muted-2);
+}
+
+/* --- Loaded files accordion ------------------------------------------- */
+
+.context-detail-files {
+  margin: 0;
+}
+
+.context-detail-files summary.context-detail-legend-row {
+  cursor: pointer;
+  list-style: none;
+}
+
+.context-detail-files summary.context-detail-legend-row::-webkit-details-marker {
+  display: none;
+}
+
+.context-detail-files-list {
+  margin-left: 20px;
+  padding-left: 0.25rem;
+  border-left: 1px solid var(--border);
+}
+
+.context-detail-files-empty {
+  padding: 4px 0 4px 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted-2);
+}
+
+.context-detail-file-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0 3px 0.5rem;
+  font-size: 0.75rem;
+}
+
+.context-detail-files-path {
+  color: var(--text);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.context-detail-file-tokens {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.context-detail-file-occurrences {
+  color: var(--muted-2);
+}
+
+/* --- System prompt ---------------------------------------------------- */
+
+.context-detail-system-details {
+  margin: 0;
+}
+
+.context-detail-system-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.context-detail-system-source {
+  font-size: 0.72rem;
+  color: var(--muted-2);
+}
+
+.context-detail-system-text {
+  margin: 0.5rem 0 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.context-detail-system-empty {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted-2);
+}
+
+/* --- Raw messages anchor (Stage 06 replaces this section) ------------- */
+
+.context-detail-raw-placeholder {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted-2);
+}
+
+/* --- Raw messages inspector ------------------------------------------- */
+
+.context-detail-raw-status {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted-2);
+}
+
+.context-detail-raw-rows {
+  margin-top: 0.5rem;
+}
+
+.context-detail-raw-row {
+  margin: 0;
+}
+
+.context-detail-raw-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--text);
+  min-height: 28px;
+}
+
+.context-detail-raw-summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-detail-raw-chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 4px solid var(--muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform 0.15s ease;
+}
+
+details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
+  transform: rotate(90deg);
+}
+
+.context-detail-raw-role {
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.context-detail-raw-role--system {
+  color: var(--muted);
+}
+
+.context-detail-raw-role--user {
+  color: var(--accent-2);
+}
+
+.context-detail-raw-role--assistant {
+  color: var(--accent);
+}
+
+.context-detail-raw-role--tool {
+  color: var(--good);
+}
+
+.context-detail-raw-seq {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--muted-2);
+}
+
+.context-detail-raw-time {
+  font-size: 0.72rem;
+  color: var(--muted-2);
+}
+
+.context-detail-raw-tool {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.context-detail-raw-json {
+  margin: 0.4rem 0 0.8rem;
+  max-height: 300px;
+  overflow: auto;
+  padding: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.context-detail-raw-loadmore,
+.context-detail-raw-retry {
+  margin-top: 0.5rem;
+  display: block;
+  width: 100%;
+}

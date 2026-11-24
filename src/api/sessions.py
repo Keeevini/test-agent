@@ -11,7 +11,7 @@ Route ordering matters: ``/api/sessions/search`` is declared before
 
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.agent.context import build_context_summary
@@ -116,5 +116,18 @@ def create_sessions_router(sessions, max_context_tokens: int = 16384,
             meta, messages, calls,
             limit=max_context_tokens, model=model, tool_specs=tool_specs or [],
         )
+
+    @router.get('/api/sessions/{session_id}/context/messages')
+    async def get_context_raw_messages(
+        session_id: str,
+        offset: int = Query(ge=0, default=0),
+        limit: int = Query(ge=1, le=50, default=20),
+    ):
+        """Get a read-only paginated page of raw stored messages."""
+        meta = sessions.get(session_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        page = sessions.get_raw_message_page(session_id, offset, limit)
+        return {"session_id": session_id, **page}
 
     return router

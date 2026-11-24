@@ -18,7 +18,7 @@ group contexts so a live stream and a replay never share state.
 | `approval.js` | Approval card + decision POST | `addApproval` | See below. |
 | `history.js` | Transcript replay from stored messages | `renderHistory`, `parseToolArgs` | See below. |
 
-## `controller.js` — `createConversationController({ api, sessions, messages, status })`
+## `controller.js` — `createConversationController({ api, sessions, messages, status, contextWindow })`
 - Owns `busy`, `abortController`, and per-turn `assistantText`/`assistantBody`/
   `reasoningCard` state. Per-turn state is local to a turn, never a shared
   singleton.
@@ -49,7 +49,11 @@ group contexts so a live stream and a replay never share state.
 - `dispatch(event)` handles: `reasoning_delta`, `content_delta`, `context`,
   `tool_call`, `approval_required`, `tool_result`, `error`. A `tool_call` /
   `approval_required` / `tool_result` ends the current assistant message, so
-  the next `content_delta` starts a fresh message.
+  the next `content_delta` starts a fresh message. The `context` event
+  schedules a debounced `contextWindow.refresh()` (250 ms) so the sidebar
+  snapshot is refreshed once per turn, not once per token chunk.
+- `send()` calls `contextWindow.refresh()` in its `finally` block so the
+  ring and sidebar reflect the tokens consumed by the turn.
 
 ## `composer.js` — `initComposer({ composer, promptEl, sendButton, clearButton, conversation, onNewChat })`
 - Mirrors the conversation's busy state onto the input/send button (single

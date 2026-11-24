@@ -11,5 +11,21 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
-.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
-.chat-panel { min-width: 0; display: flex; flex-direction: column; position: relative; }
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); }
+/* When the context window is open, a third column appears for the sidebar. The
+   `hidden` attribute keeps the aside out of the grid flow until it is opened. */
+.layout.context-open { grid-template-columns: 280px minmax(0, 1fr) minmax(310px, 390px); }
+.context-sidebar { min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--panel); }
+/* The `hidden` attribute is authoritative: it must win over the flex display. */
+.context-sidebar[hidden] { display: none !important; }
+.context-sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 10px; border-bottom: 1px solid var(--border); }
+.context-sidebar-header h2 { font-size: 15px; margin: 0; font-weight: 670; color: var(--text-strong); }
+.context-close { border: 0; padding: 2px 8px; font-size: 16px; line-height: 1; color: var(--muted); }
+.context-close:hover { color: var(--text); }
+.context-sidebar-body { flex: 1; overflow-y: auto; padding: 14px 16px; color: var(--text); font-size: 13px; line-height: 1.5; }
+.context-summary { font-weight: 600; color: var(--text-strong); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.context-source { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.context-breakdown { margin: 0; padding-left: 20px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+/* Mobile-only context backdrop. Must stay out of the grid flow on desktop so
+   the chat-panel is not pushed into a second row / narrow column. */
+.context-backdrop { display: none; }

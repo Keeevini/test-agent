@@ -11,7 +11,7 @@ import { schedule as scheduleMarkdown, flushFinal, renderInto, cancel as cancelM
 import { renderHistory } from './history.js';
 import { addApproval } from './approval.js';
 
-export function createConversationController({ api, sessions, messages, status }) {
+export function createConversationController({ api, sessions, messages, status, contextWindow }) {
   let busy = false;
   let abortController = null;
   const busyListeners = [];
@@ -39,6 +39,19 @@ export function createConversationController({ api, sessions, messages, status }
 
   function onBusyChange(fn) {
     busyListeners.push(fn);
+  }
+
+  // Coalesce debounced context refreshes: the SSE `context` event fires on
+  // every token chunk, so schedule one snapshot refresh per turn instead of
+  // one per chunk. The refresh is guarded inside the context-window
+  // controller (monotonic generation + selected-id check).
+  let contextRefreshTimer = null;
+  function scheduleContextRefresh() {
+    if (contextRefreshTimer) clearTimeout(contextRefreshTimer);
+    contextRefreshTimer = setTimeout(() => {
+      contextRefreshTimer = null;
+      contextWindow.refresh();
+    }, 250);
   }
 
   // History responses are applied only if their requested session is still
@@ -139,7 +152,7 @@ export function createConversationController({ api, sessions, messages, status }
         scheduleMarkdown(assistantBody, assistantText);
         messages.scroll();
       } else if (event.type === 'context') {
-        status.updateContext(event);
+        scheduleContextRefresh();
       } else if (event.type === 'tool_call') {
         if (reasoningCard && reasoningStartTime) {
           reasoning.finalize(reasoningCard, reasoningStartTime);
@@ -230,6 +243,9 @@ export function createConversationController({ api, sessions, messages, status }
       // the first message) appears in the list, and so the session's title /
       // token count stay current after each turn.
       sessions.refresh();
+      // Refresh the context snapshot once the turn settles, so the ring and
+      // sidebar reflect the tokens consumed by this turn.
+      contextWindow.refresh();
     }
   }
 

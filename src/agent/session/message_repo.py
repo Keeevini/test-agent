@@ -76,6 +76,56 @@ class MessagesRepository:
             self._conn.commit()
         return seq
 
+    def get_raw_message_page(
+        self,
+        session_id: str,
+        offset: int,
+        limit: int,
+    ) -> dict:
+        """Return a bounded, read-only page of raw stored messages.
+
+        Returns a dict with ``total``, ``offset``, ``limit``, ``has_more``
+        and ``messages`` (each a ``SessionMessage.to_dict()`` payload plus
+        ``seq`` and ``created_ms``).
+        """
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()[0]
+            rows = self._conn.execute(
+                "SELECT seq, role, content FROM messages "
+                "WHERE session_id = ? ORDER BY seq LIMIT ? OFFSET ?",
+                (session_id, limit, offset),
+            ).fetchall()
+        messages = []
+        for r in rows:
+            msg = SessionMessage(
+                session_id=session_id,
+                seq=r["seq"],
+                role=r["role"],
+                content=r["content"],
+            ).to_dict()
+            created_ms = None
+            time_field = msg.get("time")
+            if isinstance(time_field, dict):
+                created_raw = time_field.get("created")
+                if isinstance(created_raw, (int, float)):
+                    created_ms = int(created_raw)
+            messages.append({
+                "seq": r["seq"],
+                "role": r["role"],
+                "created_ms": created_ms,
+                "raw": msg,
+            })
+        return {
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(messages) < total,
+            "messages": messages,
+        }
+
     def update_message_content(
         self,
         session_id: str,

@@ -61,7 +61,8 @@ root, not the submodules.
 - `messages(session_id)` seeds a `SYSTEM_PROMPT` on first use; `append_message`,
   `update_message_content`, `clear`, `close`.
 - Proxies for the endpoints: `list`, `get`, `create`, `search`, `update_title`,
-  `delete`, `get_messages`, `record_model_call`, `list_model_calls`.
+  `delete`, `get_messages`, `record_model_call`, `list_model_calls`,
+  `get_raw_message_page`.
 
 ## `title.py` — `SessionTitleGenerator`
 - `SessionTitleGenerator(model_client)`;

@@ -9,6 +9,7 @@ import { initComposer } from './js/conversation/composer.js';
 import { createSessionsController } from './js/sessions/controller.js';
 import { createStatusView } from './js/shell/status.js';
 import { initMobileSidebar } from './js/shell/mobile-sidebar.js';
+import { createContextWindowController } from './js/shell/context-window.js';
 
 const byId = id => document.getElementById(id);
 
@@ -21,8 +22,19 @@ const messages = createMessagesView({
 const status = createStatusView({
   badge: byId('connectionBadge'),
   indicator: byId('contextIndicator'),
-  fill: byId('contextFill'),
-  pct: byId('contextPct'),
+  fill: byId('contextRingFill'),
+  count: byId('contextCount'),
+});
+
+const contextWindow = createContextWindowController({
+  api,
+  status,
+  layout: document.querySelector('.layout'),
+  indicator: byId('contextIndicator'),
+  panel: byId('contextPanel'),
+  panelBody: byId('contextPanelBody'),
+  closeButton: byId('contextClose'),
+  backdrop: byId('contextBackdrop'),
 });
 
 const drawer = initMobileSidebar({
@@ -39,15 +51,18 @@ const sessions = createSessionsController({
   drawer,
 });
 
-const conversation = createConversationController({ api, sessions, messages, status });
+const conversation = createConversationController({ api, sessions, messages, status, contextWindow });
 
 // Connect controllers after construction to avoid circular module imports.
 sessions.setLifecycleHandlers({
   isBusy: () => conversation.isBusy(),
-  onActivate: id => conversation.loadHistory(id),
+  onActivate: id => {
+    void conversation.loadHistory(id);
+    void contextWindow.selectSession(id);
+  },
   onClear: () => {
     conversation.showEmpty();
-    status.resetContext();
+    void contextWindow.selectSession(sessions.currentId());
   },
 });
 
