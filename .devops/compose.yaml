@@ -9,7 +9,13 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${UI_PORT:-8000}:8000"
+    # Per-machine app configuration; Compose 2.24+ supports optional env files.
+    env_file:
+      - path: ../local/.env
+        required: false
     environment:
+      # Keep the Docker-reachable endpoint authoritative, not native localhost.
+      LLAMA_BASE_URL: ""
       LLM_API_URL: "${LLM_API_URL:-http://host.docker.internal:8080/v1}"
       VAULT_ROOT: /app/vault
       PYTHONDONTWRITEBYTECODE: "1"

@@ -62,7 +62,9 @@ docker compose -f compose.yaml down
 - `MAX_CONTEXT_TOKENS` — default `16384`
 - `VAULT_ROOT` — workspace the model tools can touch; default `vault/` next to the app root
 
-Per-machine values belong in `local/.env` (see `local/.env.example`). `src/app.py` also accepts
+Per-machine app values belong in `local/.env` (see `local/.env.example`). Docker Compose
+2.24+ injects this optional file; `MAX_CONTEXT_TOKENS` must be a positive integer.
+Docker deliberately overrides native `LLAMA_BASE_URL` with an empty value. `src/app.py` also accepts
 `LLM_API_URL` as a fallback for `LLAMA_BASE_URL` (Docker Compose sets `LLM_API_URL`).
 
 Docker-level values (container name, host port, LLM URL) belong in `.devops/.env` (see

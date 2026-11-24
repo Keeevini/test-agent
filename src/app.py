@@ -14,6 +14,7 @@ from src.api.health import create_health_router
 from src.api.sessions import create_sessions_router
 from src.agent import ApprovalManager, LocalAgent, SessionStore
 from src.agent.tools import WorkspaceTools
+from src.config import parse_context_limit
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ LLAMA_BASE_URL = (
     or "http://127.0.0.1:8080/v1"
 )
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "local")
-MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "16384"))
+MAX_CONTEXT_TOKENS = parse_context_limit(os.getenv("MAX_CONTEXT_TOKENS"))
 
 # Session history is project-owned state: only this app reads and writes it,
 # never the model, so it lives in the per-machine ``local/`` tree rather than
