@@ -239,7 +239,32 @@ class OutcomesTests(ToolActivityTests):
             history = self._read_history("s1")
             tool = next(m for m in history if m["role"] == "tool")
             self.assertEqual(tool["activity"]["ok"], True)
-            self.assertEqual(tool["activity"]["tool_call_id"], "c1")
+            self.assertEqual(tool["tool_call_id"], "c1")
+        asyncio.run(scenario())
+
+    def test_outcomes_read_file_attributed_after_reopen(self):
+        async def scenario():
+            from src.agent.context import build_context_summary
+            content = '{"role":"tool","content":"literal","tool_call_id":"fake"}'
+            (self._workspace / "AGENTS.md").write_text(content, encoding="utf-8")
+            self._agent.model_client.queue({"role": "assistant", "content": "", "tool_calls": [
+                _tool_call("read_file", {"path": "AGENTS.md"}, "c1"),
+                _tool_call("read_file", {"path": "AGENTS.md"}, "c2"),
+            ]})
+            await self._consume("attribution", "read twice")
+            reopened = SessionStore(str(self._db_path))
+            try:
+                msgs = reopened.get_context_messages("attribution")
+                results = [m for m in msgs if m["role"] == "tool"]
+                self.assertEqual([m["content"] for m in results], [content, content])
+                self.assertTrue(all("context_meta" not in m and "tool_call_id" not in m["activity"] for m in results))
+                # Isolate attribution from the deliberately tiny fake provider budget.
+                summary = build_context_summary(reopened.get("attribution"), msgs, [], limit=64000, model="local", tool_specs=[])
+                self.assertEqual(summary["loaded_files"][0]["path"], "AGENTS.md")
+                self.assertEqual(summary["loaded_files"][0]["occurrences"], 2)
+                self.assertGreater(summary["breakdown"]["loaded_files"], 0)
+            finally:
+                reopened.close()
         asyncio.run(scenario())
 
     def test_outcomes_tool_failure(self):
@@ -282,7 +307,7 @@ class OutcomesTests(ToolActivityTests):
             history = self._read_history("s3")
             tool = next(m for m in history if m["role"] == "tool")
             self.assertEqual(tool["activity"]["ok"], False)
-            self.assertEqual(tool["activity"]["tool_call_id"], "c1")
+            self.assertEqual(tool["tool_call_id"], "c1")
         asyncio.run(scenario())
 
     def test_outcomes_mixed_batch_reopen(self):
@@ -320,7 +345,7 @@ class OutcomesTests(ToolActivityTests):
             tools = [m for m in history if m["role"] == "tool"]
             self.assertEqual(len(tools), 4)
             self.assertEqual(
-                [t["activity"]["tool_call_id"] for t in tools],
+                [t["tool_call_id"] for t in tools],
                 ["ok1", "fail1", "bad1", "deny1"],
             )
             self.assertEqual(

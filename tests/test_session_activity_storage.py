@@ -1,9 +1,7 @@
 """Session activity storage tests.
 
-Covers the additive v1 -> v2 migration (the ``activity_json`` column), the
-history/model projections, legacy tool ``tool_call_id`` inference, and the
-wrapper projections. Uses a temporary database and a synthetic v1 schema so
-no real data is touched.
+Covers fresh schema rejection/reopen, explicit tool IDs, batch association,
+and history/model projections. Uses only temporary databases.
 """
 
 import sqlite3
@@ -68,125 +66,45 @@ def _v1_columns(db_path: Path) -> set:
     return {row[1] for row in rows}
 
 
-class MigrationTests(TestCase):
-    """Additive v1 -> v2 migration of the activity_json column."""
-
-    def test_migration_adds_column_to_v1_db(self):
+class FreshSchemaTests(TestCase):
+    def test_reject_old_db_without_migration(self):
         with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "sessions.db"
-            _create_v1_db(db_path)
-            self.assertFalse("activity_json" in _v1_columns(db_path))
+            path = Path(directory) / "sessions.db"
+            _create_v1_db(path)
+            with sqlite3.connect(path) as conn:
+                conn.execute("INSERT INTO sessions (session_id) VALUES ('old')")
+            with self.assertRaisesRegex(RuntimeError, "Incompatible sessions database"):
+                SessionStore(path)
+            self.assertNotIn("activity_json", _v1_columns(path))
+            with sqlite3.connect(path) as conn:
+                self.assertEqual(conn.execute("SELECT session_id FROM sessions").fetchone()[0], "old")
 
-            # Opening the store applies the schema, adding the column.
-            store = SessionStore(db_path)
-            try:
-                self.assertTrue("activity_json" in _v1_columns(db_path))
-            finally:
-                store.close()
-
-    def test_migration_preserves_existing_rows(self):
+    def test_fresh_schema_and_reopen(self):
         with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "sessions.db"
-            _create_v1_db(db_path)
-            conn = sqlite3.connect(str(db_path))
-            try:
-                conn.execute(
-                    "INSERT INTO sessions (session_id, title) VALUES (?, ?)",
-                    ("legacy", "Legacy Session"),
-                )
-                conn.execute(
-                    "INSERT INTO messages "
-                    "(session_id, seq, role, content) VALUES (?, ?, ?, ?)",
-                    ("legacy", 0, "user", "hello"),
-                )
-                # A JSON-looking raw tool result must stay raw.
-                conn.execute(
-                    "INSERT INTO messages "
-                    "(session_id, seq, role, content) VALUES (?, ?, ?, ?)",
-                    ("legacy", 1, "tool", '{"a": 1}'),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            store = SessionStore(db_path)
-            try:
-                msgs = store.get_messages("legacy")
-                self.assertEqual(
-                    msgs,
-                    [
-                        {"role": "user", "content": "hello"},
-                        {"role": "tool", "content": '{"a": 1}'},
-                    ],
-                )
-                # Existing rows have NULL activity after migration.
-                conn = sqlite3.connect(str(db_path))
-                try:
-                    row = conn.execute(
-                        "SELECT activity_json FROM messages "
-                        "WHERE session_id = ? AND seq = 0",
-                        ("legacy",),
-                    ).fetchone()
-                    self.assertIsNone(row[0])
-                finally:
-                    conn.close()
-            finally:
-                store.close()
-
-    def test_migration_is_idempotent_on_reopen(self):
-        with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "sessions.db"
-            _create_v1_db(db_path)
-            conn = sqlite3.connect(str(db_path))
-            try:
-                conn.execute(
-                    "INSERT INTO sessions (session_id, title) VALUES (?, ?)",
-                    ("legacy", "Legacy Session"),
-                )
-                conn.execute(
-                    "INSERT INTO messages "
-                    "(session_id, seq, role, content) VALUES (?, ?, ?, ?)",
-                    ("legacy", 0, "user", "keep"),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            # First open migrates; close; second open must be a no-op.
-            store = SessionStore(db_path)
+            path = Path(directory) / "sessions.db"
+            store = SessionStore(path)
+            store.create_session("s")
+            store.append_message("s", "tool", "keep", tool_call_id="c", activity={"version": 1, "ok": True})
             store.close()
-            store = SessionStore(db_path)
+            store = SessionStore(path)
             try:
-                self.assertTrue("activity_json" in _v1_columns(db_path))
-                msgs = store.get_messages("legacy")
-                self.assertEqual(msgs, [{"role": "user", "content": "keep"}])
+                self.assertEqual(store.get_messages("s", include_activity=True), [{"role": "tool", "content": "keep", "tool_call_id": "c", "activity": {"version": 1, "ok": True}}])
+                self.assertIn("tool_call_id", _v1_columns(path))
+                self.assertIn("activity_json", _v1_columns(path))
+                store.delete_session("s")
+                self.assertEqual(store.get_messages("s"), [])
             finally:
                 store.close()
 
-    def test_migration_cascade_deletes_metadata_with_rows(self):
+    def test_explicit_id_required(self):
         with TemporaryDirectory() as directory:
-            db_path = Path(directory) / "sessions.db"
-            _create_v1_db(db_path)
-            conn = sqlite3.connect(str(db_path))
+            store = SessionStore(Path(directory) / "sessions.db")
             try:
-                conn.execute(
-                    "INSERT INTO sessions (session_id, title) VALUES (?, ?)",
-                    ("legacy", "Legacy Session"),
-                )
-                conn.execute(
-                    "INSERT INTO messages "
-                    "(session_id, seq, role, content) VALUES (?, ?, ?, ?)",
-                    ("legacy", 0, "user", "bye"),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            store = SessionStore(db_path)
-            try:
-                store.delete_session("legacy")
-                self.assertIsNone(store.get_session("legacy"))
-                self.assertEqual(store.get_messages("legacy"), [])
+                store.create_session("s")
+                for role, text, cid in [("tool", "x", None), ("tool", "x", ""), ("tool", {"x": 1}, "c"), ("user", "x", "c")]:
+                    with self.assertRaises(ValueError):
+                        store.append_message("s", role, text, tool_call_id=cid)
+                self.assertEqual(store.get_messages("s"), [])
             finally:
                 store.close()
 
@@ -203,7 +121,7 @@ class ProjectionTests(TestCase):
             try:
                 store.create_session("s")
                 # A JSON-looking raw tool result must stay a raw string.
-                store.append_message("s", "tool", '{"raw": true}')
+                store.append_message("s", "tool", '{"raw": true}', tool_call_id="c")
                 msgs = store.get_messages("s", include_activity=True)
                 self.assertEqual(msgs[0]["content"], '{"raw": true}')
             finally:
@@ -215,7 +133,7 @@ class ProjectionTests(TestCase):
             try:
                 store.create_session("s")
                 # Malformed activity (not valid JSON) must not crash.
-                store.append_message("s", "tool", "result", activity=None)
+                store.append_message("s", "tool", "result", tool_call_id="c", activity=None)
                 # Write a malformed activity directly to the DB.
                 store._conn.execute(
                     "UPDATE messages SET activity_json = ? "
@@ -247,7 +165,7 @@ class ProjectionTests(TestCase):
             finally:
                 store.close()
 
-    def test_projection_tool_call_id_from_activity(self):
+    def test_projection_tool_call_id_from_column(self):
         with TemporaryDirectory() as directory:
             store = self._store(directory)
             try:
@@ -256,7 +174,7 @@ class ProjectionTests(TestCase):
                     "s",
                     "tool",
                     "hello\n",
-                    activity={"version": 1, "tool_call_id": "c1", "ok": True},
+                    tool_call_id="c1", activity={"version": 1, "ok": True},
                 )
                 model = store.get_messages("s")
                 history = store.get_messages("s", include_activity=True)
@@ -267,7 +185,7 @@ class ProjectionTests(TestCase):
                 self.assertNotIn("activity", model[0])
                 self.assertEqual(
                     history[0]["activity"],
-                    {"version": 1, "tool_call_id": "c1", "ok": True},
+                    {"version": 1, "ok": True},
                 )
             finally:
                 store.close()
@@ -281,13 +199,13 @@ class ProjectionTests(TestCase):
                     "s",
                     "tool",
                     "first",
-                    activity={"version": 1, "tool_call_id": "c1"},
+                    tool_call_id="c1", activity={"version": 1},
                 )
                 store.update_message_content("s", seq, "second")
                 history = store.get_messages("s", include_activity=True)
                 self.assertEqual(history[0]["content"], "second")
                 self.assertEqual(
-                    history[0]["activity"], {"version": 1, "tool_call_id": "c1"}
+                    history[0]["activity"], {"version": 1}
                 )
             finally:
                 store.close()
@@ -298,175 +216,34 @@ class ProjectionTests(TestCase):
             try:
                 store.create_session("s")
                 seq = store.append_message(
-                    "s", "tool", "body", activity={"version": 1}
+                    "s", "tool", "body", tool_call_id="c9", activity={"version": 1}
                 )
                 store.update_message_activity(
-                    "s", seq, {"version": 1, "tool_call_id": "c9", "ok": True}
+                    "s", seq, {"version": 1, "ok": True}
                 )
                 history = store.get_messages("s", include_activity=True)
                 self.assertEqual(history[0]["content"], "body")
                 self.assertEqual(
                     history[0]["activity"],
-                    {"version": 1, "tool_call_id": "c9", "ok": True},
+                    {"version": 1, "ok": True},
                 )
             finally:
                 store.close()
 
 
-class LegacyTests(TestCase):
-    """Read-only legacy tool_call_id inference."""
-
-    def _store(self, directory: str) -> SessionStore:
-        return SessionStore(Path(directory) / "sessions.db")
-
-    def test_legacy_equal_size_batch_infers_ids(self):
-        with TemporaryDirectory() as directory:
-            store = self._store(directory)
-            try:
-                store.create_session("s")
-                store.append_message(
-                    "s",
-                    "assistant",
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {"id": "a", "type": "function", "function": {"name": "t"}},
-                            {"id": "b", "type": "function", "function": {"name": "t"}},
-                        ],
-                    },
-                )
-                store.append_message("s", "tool", "r1")
-                store.append_message("s", "tool", "r2")
-                msgs = store.get_messages("s", include_activity=True)
-                self.assertEqual(msgs[1]["tool_call_id"], "a")
-                self.assertEqual(msgs[2]["tool_call_id"], "b")
-            finally:
-                store.close()
-
-    def test_legacy_ran_only_partial_infers_ids(self):
-        with TemporaryDirectory() as directory:
-            store = self._store(directory)
-            try:
-                store.create_session("s")
-                store.append_message(
-                    "s",
-                    "assistant",
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "a",
-                                "time": {"ran": "t0", "completed": "t1"},
-                            },
-                            {
-                                "id": "b",
-                                "time": {"ran": "t0", "completed": "t1"},
-                            },
-                            {
-                                "id": "c",
-                                "time": {"completed": "t1"},
-                            },
-                        ],
-                    },
-                )
-                # Only two results were persisted (the two ran calls).
-                store.append_message("s", "tool", "r1")
-                store.append_message("s", "tool", "r2")
-                msgs = store.get_messages("s", include_activity=True)
-                self.assertEqual(msgs[1]["tool_call_id"], "a")
-                self.assertEqual(msgs[2]["tool_call_id"], "b")
-            finally:
-                store.close()
-
-    def test_legacy_ambiguous_partial_no_inference(self):
-        with TemporaryDirectory() as directory:
-            store = self._store(directory)
-            try:
-                store.create_session("s")
-                # Partial batch with no completed stamps -> ambiguous.
-                store.append_message(
-                    "s",
-                    "assistant",
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {"id": "a", "time": {"ran": "t0"}},
-                            {"id": "b", "time": {"ran": "t0"}},
-                            {"id": "c", "time": {}},
-                        ],
-                    },
-                )
-                store.append_message("s", "tool", "r1")
-                store.append_message("s", "tool", "r2")
-                msgs = store.get_messages("s", include_activity=True)
-                self.assertNotIn("tool_call_id", msgs[1])
-                self.assertNotIn("tool_call_id", msgs[2])
-            finally:
-                store.close()
-
-    def test_legacy_mixed_batch_no_inference(self):
-        with TemporaryDirectory() as directory:
-            store = self._store(directory)
-            try:
-                store.create_session("s")
-                store.append_message(
-                    "s",
-                    "assistant",
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {"id": "a"},
-                            {"id": "b"},
-                        ],
-                    },
-                )
-                # One row has an explicit ID, one does not -> mixed.
-                store.append_message(
-                    "s",
-                    "tool",
-                    "r1",
-                    activity={"version": 1, "tool_call_id": "a"},
-                )
-                store.append_message("s", "tool", "r2")
-                msgs = store.get_messages("s", include_activity=True)
-                # The explicit ID is preserved; the other row is left intact.
-                self.assertEqual(msgs[1]["tool_call_id"], "a")
-                self.assertNotIn("tool_call_id", msgs[2])
-            finally:
-                store.close()
-
-    def test_legacy_boundary_does_not_cross(self):
-        with TemporaryDirectory() as directory:
-            store = self._store(directory)
-            try:
-                store.create_session("s")
-                # Assistant with 2 calls, but a user row interrupts the batch.
-                store.append_message(
-                    "s",
-                    "assistant",
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {"id": "a"},
-                            {"id": "b"},
-                        ],
-                    },
-                )
-                store.append_message("s", "tool", "r1")
-                store.append_message("s", "user", "interrupt")
-                store.append_message("s", "tool", "r2")
-                msgs = store.get_messages("s", include_activity=True)
-                # Only the contiguous run immediately after the assistant
-                # (just r1) is a batch; r2 is not paired.
-                self.assertNotIn("tool_call_id", msgs[1])
-                self.assertNotIn("tool_call_id", msgs[3])
-            finally:
-                store.close()
+class ToolAssociationTests(TestCase):
+    def test_batch_identity_and_boundaries(self):
+        from src.agent.session.tool_links import associate_tool_results
+        def assistant(*names):
+            return {"role": "assistant", "tool_calls": [{"id": cid, "function": {"name": name}} for cid, name in names]}
+        def tool(cid):
+            return {"role": "tool", "tool_call_id": cid}
+        rows = [assistant(("x", "read_file"), ("y", "search_text")), tool("y"), tool("x"),
+                assistant(("x", "list_directory")), tool("x"), {"role": "user"}, tool("x"),
+                assistant(("x", "read_file"), ("x", "search_text")), tool("x")]
+        links = associate_tool_results(rows)
+        self.assertEqual({i: c["function"]["name"] for i, c in links.items()},
+                         {1: "search_text", 2: "read_file", 4: "list_directory"})
 
 
 class WrapperTests(TestCase):
@@ -486,7 +263,7 @@ class WrapperTests(TestCase):
                     "s",
                     "tool",
                     "result",
-                    activity={"version": 1, "tool_call_id": "c1"},
+                    tool_call_id="c1", activity={"version": 1},
                 )
                 model = wrapper.messages("s")
                 self.assertNotIn("activity", model[-1])
@@ -503,12 +280,12 @@ class WrapperTests(TestCase):
                     "s",
                     "tool",
                     "result",
-                    activity={"version": 1, "tool_call_id": "c1", "ok": True},
+                    tool_call_id="c1", activity={"version": 1, "ok": True},
                 )
                 history = wrapper.get_messages("s")
                 self.assertEqual(
                     history[-1]["activity"],
-                    {"version": 1, "tool_call_id": "c1", "ok": True},
+                    {"version": 1, "ok": True},
                 )
                 self.assertEqual(history[-1]["tool_call_id"], "c1")
             finally:
@@ -519,13 +296,13 @@ class WrapperTests(TestCase):
             wrapper = self._wrapper(directory)
             try:
                 wrapper._store.create_session("s")
-                seq = wrapper.append_message("s", "tool", "body")
+                seq = wrapper.append_message("s", "tool", "body", tool_call_id="c9")
                 wrapper.update_message_activity(
-                    "s", seq, {"version": 1, "tool_call_id": "c9"}
+                    "s", seq, {"version": 1}
                 )
                 history = wrapper.get_messages("s")
                 self.assertEqual(
-                    history[-1]["activity"], {"version": 1, "tool_call_id": "c9"}
+                    history[-1]["activity"], {"version": 1}
                 )
             finally:
                 wrapper.close()

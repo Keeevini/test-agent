@@ -74,21 +74,4 @@ class SessionMessage:
             except (json.JSONDecodeError, TypeError):
                 pass
             return {"role": "assistant", "content": content_raw}
-        if self.role == "tool":
-            # Tool results are persisted as JSON carrying the durable
-            # ``tool_call_id`` and ``context_meta``. Only trust a parsed value
-            # that is a genuine tool object; otherwise fall back to legacy
-            # raw text so old rows still replay without crashing.
-            try:
-                parsed = json.loads(content_raw)
-            except (json.JSONDecodeError, TypeError):
-                parsed = None
-            if (
-                isinstance(parsed, dict)
-                and parsed.get("role") == "tool"
-                and isinstance(parsed.get("content"), str)
-                and isinstance(parsed.get("tool_call_id"), str)
-            ):
-                return parsed
-            return {"role": "tool", "content": content_raw}
         return {"role": self.role, "content": content_raw}

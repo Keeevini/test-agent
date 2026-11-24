@@ -111,7 +111,7 @@ def create_sessions_router(sessions, max_context_tokens: int = 16384,
         meta = sessions.get(session_id)
         if meta is None:
             raise HTTPException(status_code=404, detail="Session not found")
-        messages = sessions.get_messages(session_id)
+        messages = sessions.get_context_messages(session_id)
         calls = sessions.list_model_calls(session_id)
         return build_context_summary(
             meta, messages, calls,

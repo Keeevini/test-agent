@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 from .prompt import SYSTEM_PROMPT
+from .session.tool_links import associate_tool_results
 from .token_counter import count_message_tokens, estimate_tokens
 
 
@@ -43,34 +44,30 @@ def _last_assistant_index(messages: list[dict]) -> int | None:
     return None
 
 
-def _extract_loaded_files(messages: list[dict]) -> list[dict]:
-    """Collect successful ``read_file`` tool rows.
+def _file_paths(messages: list[dict]) -> dict[int, str]:
+    result = {}
+    for index, call in associate_tool_results(messages).items():
+        activity = messages[index].get("activity")
+        function = call.get("function") or {}
+        if not isinstance(activity, dict) or activity.get("ok") is not True or function.get("name") != "read_file":
+            continue
+        try:
+            args = json.loads(function.get("arguments", ""))
+        except (ValueError, TypeError):
+            continue
+        path = args.get("path") if isinstance(args, dict) else None
+        if isinstance(path, str) and path:
+            result[index] = path
+    return result
 
-    Returns a list of ``{path, tokens, occurrences, source}`` entries.
-    Only rows with ``context_meta.name == 'read_file'``, ``ok == True``,
-    and a valid string path are included.
-    """
+
+def _extract_loaded_files(messages: list[dict]) -> list[dict]:
     files: dict[str, dict] = {}
-    for msg in messages:
-        if msg.get("role") != "tool":
-            continue
-        if not _is_read_file_row(msg):
-            continue
-        meta = msg["context_meta"]
-        path = meta["path"]
-        content = msg.get("content")
-        text = content if isinstance(content, str) else ""
-        tokens = estimate_tokens(text)
-        if path in files:
-            files[path]["occurrences"] += 1
-            files[path]["tokens"] += tokens
-        else:
-            files[path] = {
-                "path": path,
-                "tokens": tokens,
-                "occurrences": 1,
-                "source": "estimated",
-            }
+    for index, path in _file_paths(messages).items():
+        content = messages[index].get("content")
+        row = files.setdefault(path, {"path": path, "tokens": 0, "occurrences": 0, "source": "estimated"})
+        row["tokens"] += estimate_tokens(content if isinstance(content, str) else "")
+        row["occurrences"] += 1
     return list(files.values())
 
 
@@ -91,7 +88,8 @@ def _category_weights(
     tool_usage = 0
     other = 0
 
-    for msg in messages:
+    file_paths = _file_paths(messages)
+    for index, msg in enumerate(messages):
         role = msg.get("role")
         content = msg.get("content")
         content_str = content if isinstance(content, str) else ""
@@ -110,7 +108,7 @@ def _category_weights(
                 tool_usage += estimate_tokens(fn.get("arguments", ""))
         elif role == "tool":
             # Skip file content (counted in loaded_files)
-            is_file = _is_read_file_row(msg)
+            is_file = index in file_paths
             if is_file:
                 pass  # already in file_token_sum
             else:
@@ -136,19 +134,6 @@ def _category_weights(
         "tool_usage": tool_usage,
         "other": other,
     }
-
-
-def _is_read_file_row(msg: dict) -> bool:
-    """Check if a tool message is a successful read_file row."""
-    meta = msg.get("context_meta")
-    return (
-        msg.get("role") == "tool"
-        and isinstance(meta, dict)
-        and meta.get("name") == "read_file"
-        and meta.get("ok") is True
-        and isinstance(meta.get("path"), str)
-        and bool(meta["path"])
-    )
 
 
 def _reconcile(

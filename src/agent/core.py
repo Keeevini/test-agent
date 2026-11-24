@@ -259,38 +259,29 @@ class LocalAgent:
                 # All normal branches call it exactly once before yielding result.
                 settled_ids: set[str] = set()
 
-                def settle(
-                    name: str,
-                    args: Any,
-                    call: dict[str, Any],
-                    call_id: str,
-                    result: str,
-                    ok: bool,
+                def persist_outcome(
+                    name: str, call_id: str, result: str, ok: bool, *,
+                    interrupted: bool = False,
                 ) -> dict[str, Any]:
-                    """Store a model tool row, update timing, return the SSE payload."""
-                    meta = _result_meta(name, result)
-                    call["time"]["completed"] = _now_ms()
-                    context_meta = {"name": name, "ok": ok}
-                    if (name == "read_file" and ok and isinstance(args, dict)
-                            and isinstance(args.get("path"), str)):
-                        context_meta["path"] = args["path"]
+                    """The single durable outcome writer, including synthetic results."""
+                    meta = {} if interrupted else _result_meta(name, result)
+                    activity = {"version": 1, "ok": ok, "meta": meta}
+                    if interrupted:
+                        activity["interrupted"] = True
                     self.sessions.append_message(
-                        session_id,
-                        "tool",
-                        result,
-                        activity={
-                            "version": 1,
-                            "tool_call_id": call_id,
-                            "ok": ok,
-                            "meta": meta,
-                            "context_meta": context_meta,
-                        },
+                        session_id, "tool", result, tool_call_id=call_id, activity=activity,
                     )
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call_id, "content": result,
-                         "context_meta": context_meta}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
                     settled_ids.add(call_id)
+                    return meta
+
+                def settle(
+                    name: str, args: Any, call: dict[str, Any], call_id: str,
+                    result: str, ok: bool,
+                ) -> dict[str, Any]:
+                    """Persist a normal result before emitting its unchanged SSE payload."""
+                    call["time"]["completed"] = _now_ms()
+                    meta = persist_outcome(name, call_id, result, ok)
                     return {
                         "type": "tool_result",
                         "tool_call_id": call_id,
@@ -427,31 +418,9 @@ class LocalAgent:
                         if call_id in settled_ids:
                             continue
                         result = "Tool call interrupted; no result recorded."
-                        context_meta = {"name": (call.get("function") or {}).get("name", ""),
-                                        "ok": False}
                         try:
-                            self.sessions.append_message(
-                                session_id,
-                                "tool",
-                                result,
-                                activity={
-                                    "version": 1,
-                                    "tool_call_id": call_id,
-                                    "ok": False,
-                                    "meta": {},
-                                    "interrupted": True,
-                                    "context_meta": context_meta,
-                                },
-                            )
-                            messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call_id,
-                                    "content": result,
-                                    "context_meta": context_meta,
-                                }
-                            )
-                            settled_ids.add(call_id)
+                            persist_outcome((call.get("function") or {}).get("name", ""),
+                                            call_id, result, False, interrupted=True)
                         except Exception:
                             logger.exception(
                                 "Failed to persist interrupted tool outcome for %s",

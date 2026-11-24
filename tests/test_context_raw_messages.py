@@ -5,8 +5,7 @@ and the contracts the Stage 06 handoff requires:
 
 * pagination: 5 rows, limit=2, offsets 0/2/4/6 → [0,1],[2,3],[4],[]
 * 404 on missing session (no write, no seed)
-* legacy plain-text tool row fallback
-* tool metadata JSON round-trip (context_meta, tool_call_id)
+* literal tool content, explicit ID, activity, and derived tool name
 * usage/time preservation on assistant rows
 * query bounds: offset ge=0, limit ge=1 le=50
 * large content and escape characters round-trip unchanged
@@ -28,22 +27,6 @@ from src.agent.session_store import SessionStore
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-def _tool_result(call_id, name, content, ok, path=None):
-    """Build a tool message dict in the save_tool_result shape."""
-    inner: dict[str, Any] = {
-        "role": "tool",
-        "tool_call_id": call_id,
-        "content": content,
-        "context_meta": {"name": name, "ok": ok},
-    }
-    if name == "read_file" and ok and isinstance(path, str):
-        inner["context_meta"]["path"] = path
-    return {
-        "role": "tool",
-        "content": json.dumps(inner, ensure_ascii=False),
-    }
-
 
 def _make_store(directory: str) -> SessionStore:
     return SessionStore(Path(directory) / "sessions.db")
@@ -163,33 +146,18 @@ class RawMessageShapeTests(TestCase):
                 store.close()
 
     def test_tool_result_json_round_trip(self):
-        """A tool message with tool_call_id and context_meta round-trips."""
         with TemporaryDirectory() as d:
             store = _make_store(d)
             try:
-                store.create("s1", title="Test")
-                tool_msg = _tool_result("call_1", "read_file", "file data", True, path="notes.md")
-                store.append_message("s1", "tool", tool_msg["content"])
-                page = store.get_raw_message_page("s1", 0, 20)
-                msg = page["messages"][0]
-                raw = msg["raw"]
-                self.assertEqual(raw["role"], "tool")
-                self.assertEqual(raw["tool_call_id"], "call_1")
-                self.assertEqual(raw["context_meta"]["name"], "read_file")
-                self.assertEqual(raw["context_meta"]["path"], "notes.md")
-            finally:
-                store.close()
-
-    def test_legacy_tool_row_fallback(self):
-        """A legacy plain-text tool row falls back to {role, content}."""
-        with TemporaryDirectory() as d:
-            store = _make_store(d)
-            try:
-                store.create("s1", title="Test")
-                store.append_message("s1", "tool", "raw legacy text")
-                page = store.get_raw_message_page("s1", 0, 20)
-                msg = page["messages"][0]
-                self.assertEqual(msg["raw"], {"role": "tool", "content": "raw legacy text"})
+                store.create("s1")
+                call = {"id": "call_1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"notes.md"}'}}
+                store.append_message("s1", "assistant", {"role": "assistant", "content": "", "tool_calls": [call]})
+                content = '{"role":"tool","content":"literal","tool_call_id":"fake"}'
+                store.append_message("s1", "tool", content, tool_call_id="call_1", activity={"version": 1, "ok": True})
+                # Page begins mid-batch; actual name is available without copying metadata.
+                entry = store.get_raw_message_page("s1", 1, 1)["messages"][0]
+                self.assertEqual(entry["tool_name"], "read_file")
+                self.assertEqual(entry["raw"], {"role": "tool", "content": content, "tool_call_id": "call_1", "activity": {"version": 1, "ok": True}})
             finally:
                 store.close()
 

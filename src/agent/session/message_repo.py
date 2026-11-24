@@ -12,45 +12,32 @@ import json
 from typing import Any
 
 from .models import SessionMessage, _utcnow
+from .tool_links import associate_tool_results
 
 
 class MessagesRepository:
     """Mixin providing message CRUD on the ``messages`` table."""
 
     def get_messages(
-        self,
-        session_id: str,
-        *,
-        include_activity: bool = False,
+        self, session_id: str, *, include_activity: bool = False,
+        include_seq: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return all messages for a session, ordered by seq.
-
-        Assistant messages stored as JSON are deserialized back to dicts
-        so the LLM context can be rebuilt directly.
-
-        ``include_activity`` controls whether the optional ``activity``
-        presentation metadata is attached to each row. Tool rows can
-        also carry a top-level ``tool_call_id`` (projected from version-1
-        activity metadata, or inferred for legacy batches). The model-facing
-        projection (``include_activity=False``) keeps the same
-        ``tool_call_id`` but omits the ``activity`` field.
-        """
+        """Return chronological canonical rows; metadata only when requested."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT seq, role, content, activity_json FROM messages "
-                "WHERE session_id = ? ORDER BY seq",
-                (session_id,),
+                "SELECT seq, role, content, tool_call_id, activity_json FROM messages "
+                "WHERE session_id = ? ORDER BY seq", (session_id,),
             ).fetchall()
-        activities = [self._parse_activity(r["activity_json"]) for r in rows]
-        projected = [self._project_row(session_id, r, activity)
-                     for r, activity in zip(rows, activities)]
-        # Project explicit tool_call_id for tool rows, then run the read-only
-        # legacy inference before attaching optional activity.
-        self._attach_tool_call_ids(projected, activities)
-        if include_activity:
-            for msg, activity in zip(projected, activities):
+        projected = []
+        for row in rows:
+            msg = self._project_row(session_id, row)
+            if include_activity:
+                activity = self._parse_activity(row["activity_json"])
                 if activity is not None:
                     msg["activity"] = activity
+            if include_seq:
+                msg["seq"] = row["seq"]
+            projected.append(msg)
         return projected
 
     @staticmethod
@@ -71,123 +58,12 @@ class MessagesRepository:
         return None
 
     @staticmethod
-    def _project_row(session_id, row, activity):
-        # Activity-bearing tool rows store literal output, not a JSON envelope.
-        # Rows from the context-only branch have no activity and retain the
-        # legacy SessionMessage decoder. Never parse an activity row's output
-        # as metadata (a read_file can contain arbitrary JSON).
-        if row["role"] == "tool" and activity is not None:
-            msg = {"role": "tool", "content": row["content"]}
-            tcid = activity.get("tool_call_id")
-            if isinstance(tcid, str) and tcid:
-                msg["tool_call_id"] = tcid
-            context_meta = activity.get("context_meta")
-            if isinstance(context_meta, dict):
-                msg["context_meta"] = context_meta
-            return msg
-        return SessionMessage(session_id=session_id, seq=row["seq"],
-                              role=row["role"], content=row["content"]).to_dict()
-
-    def _attach_tool_call_ids(
-        self,
-        projected: list[dict[str, Any]],
-        activities: list[dict[str, Any] | None],
-    ) -> None:
-        """Project ``tool_call_id`` onto tool rows (explicit + legacy).
-
-        Explicit IDs come from version-1 activity metadata and are never
-        overwritten. Legacy batches (assistant rows without version-1
-        activity whose contiguous tool rows lack IDs) are paired by position
-        using only safe, unambiguous associations.
-        """
-        for msg, activity in zip(projected, activities):
-            if msg["role"] == "tool" and activity is not None:
-                tcid = activity.get("tool_call_id")
-                if isinstance(tcid, str) and tcid:
-                    msg["tool_call_id"] = tcid
-        self._infer_legacy_tool_call_ids(projected, activities)
-
-    def _infer_legacy_tool_call_ids(
-        self,
-        projected: list[dict[str, Any]],
-        activities: list[dict[str, Any] | None],
-    ) -> None:
-        """Read-only inference of ``tool_call_id`` for legacy tool batches.
-
-        For each assistant row and its immediately following contiguous
-        run of tool rows, a legacy batch is one where the assistant has no
-        version-1 activity metadata and all contiguous result rows lack
-        explicit IDs. IDs are assigned in call order only when the
-        association is unambiguous; otherwise rows are left intact.
-        """
-        n = len(projected)
-        i = 0
-        while i < n:
-            if projected[i]["role"] != "assistant":
-                i += 1
-                continue
-            # Find the contiguous run of tool rows immediately after this
-            # assistant row (never crossing a user/assistant boundary).
-            j = i + 1
-            while j < n and projected[j]["role"] == "tool":
-                j += 1
-            if j > i + 1:
-                batch = projected[i + 1 : j]
-                self._pair_legacy_batch(projected[i], batch, activities[i])
-            i = j
-
-    def _pair_legacy_batch(
-        self,
-        assistant_msg: dict[str, Any],
-        batch: list[dict[str, Any]],
-        assistant_activity: dict[str, Any] | None,
-    ) -> None:
-        """Pair a legacy assistant row with its contiguous tool batch.
-
-        Only invoked for batches where the assistant has no version-1
-        activity metadata and all contiguous result rows lack IDs.
-        """
-        if assistant_activity is not None:
-            return
-        if any("tool_call_id" in m for m in batch):
-            return
-        calls = assistant_msg.get("tool_calls") or []
-        call_ids = [
-            c["id"]
-            for c in calls
-            if isinstance(c, dict)
-            and isinstance(c.get("id"), str)
-            and c["id"]
-        ]
-        # Safe inference 1: equal-size batch with unique nonempty call IDs.
-        if (
-            len(call_ids) == len(batch)
-            and len(set(call_ids)) == len(call_ids)
-        ):
-            for m, cid in zip(batch, call_ids):
-                m["tool_call_id"] = cid
-            return
-        # Safe inference 2 (narrower): all calls completed, and the number
-        # of calls stamped `ran` equals the result count. Assign the ran
-        # calls to the result rows in order.
-        if batch and all(
-            isinstance(c, dict)
-            and isinstance(c.get("time"), dict)
-            and "completed" in c["time"]
-            for c in calls
-        ):
-            ran_calls = [
-                c
-                for c in calls
-                if isinstance(c, dict)
-                and isinstance(c.get("time"), dict)
-                and "ran" in c["time"]
-            ]
-            if len(ran_calls) == len(batch):
-                for m, c in zip(batch, ran_calls):
-                    cid = c.get("id")
-                    if isinstance(cid, str) and cid:
-                        m["tool_call_id"] = cid
+    def _project_row(session_id, row):
+        msg = SessionMessage(session_id=session_id, seq=row["seq"],
+                             role=row["role"], content=row["content"]).to_dict()
+        if row["role"] == "tool":
+            msg["tool_call_id"] = row["tool_call_id"]
+        return msg
 
     def append_message(
         self,
@@ -196,6 +72,7 @@ class MessagesRepository:
         content: str | dict[str, Any],
         *,
         activity: dict[str, Any] | None = None,
+        tool_call_id: str | None = None,
     ) -> int:
         """Append a message and return its sequence number.
 
@@ -205,6 +82,11 @@ class MessagesRepository:
         ``activity_json`` column and kept separate from the model-facing
         ``content``. It is encoded only when non-None.
         """
+        if role == "tool":
+            if not isinstance(tool_call_id, str) or not tool_call_id or not isinstance(content, str):
+                raise ValueError("Tool rows require literal content and a nonempty tool_call_id")
+        elif tool_call_id is not None:
+            raise ValueError("Only tool rows may have a tool_call_id")
         if isinstance(content, dict):
             content_str = json.dumps(content, ensure_ascii=False)
         else:
@@ -223,9 +105,9 @@ class MessagesRepository:
             seq = row["next_seq"]
             self._conn.execute(
                 "INSERT INTO messages "
-                "(session_id, seq, role, content, activity_json) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (session_id, seq, role, content_str, activity_str),
+                "(session_id, seq, role, content, tool_call_id, activity_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, seq, role, content_str, tool_call_id, activity_str),
             )
             # Touch the session's updated_at
             self._conn.execute(
@@ -253,14 +135,25 @@ class MessagesRepository:
                 (session_id,),
             ).fetchone()[0]
             rows = self._conn.execute(
-                "SELECT seq, role, content, activity_json FROM messages "
+                "SELECT seq, role, content, tool_call_id, activity_json FROM messages "
                 "WHERE session_id = ? ORDER BY seq LIMIT ? OFFSET ?",
                 (session_id, limit, offset),
             ).fetchall()
+            # A page can start mid-tool-batch. Recover at most its preceding
+            # non-tool row (not an unbounded history read).
+            prefix = None
+            if rows and rows[0]["role"] == "tool":
+                prefix = self._conn.execute(
+                    "SELECT seq, role, content, tool_call_id, activity_json FROM messages "
+                    "WHERE session_id = ? AND seq < ? AND role != 'tool' "
+                    "ORDER BY seq DESC LIMIT 1", (session_id, rows[0]["seq"]),
+                ).fetchone()
+        projected = [self._project_row(session_id, r) for r in rows]
+        preceding = [self._project_row(session_id, prefix)] if prefix else []
+        links = associate_tool_results(preceding + projected)
         messages = []
-        for r in rows:
+        for index, (r, msg) in enumerate(zip(rows, projected)):
             activity = self._parse_activity(r["activity_json"])
-            msg = self._project_row(session_id, r, activity)
             if activity is not None:
                 msg["activity"] = activity
             created_ms = None
@@ -269,12 +162,18 @@ class MessagesRepository:
                 created_raw = time_field.get("created")
                 if isinstance(created_raw, (int, float)):
                     created_ms = int(created_raw)
-            messages.append({
+            linked = links.get(index + len(preceding), {})
+            function = linked.get("function")
+            name = function.get("name") if isinstance(function, dict) else None
+            entry = {
                 "seq": r["seq"],
                 "role": r["role"],
                 "created_ms": created_ms,
                 "raw": msg,
-            })
+            }
+            if isinstance(name, str) and name:
+                entry["tool_name"] = name
+            messages.append(entry)
         return {
             "total": total,
             "offset": offset,

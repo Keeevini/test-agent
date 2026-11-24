@@ -209,7 +209,7 @@ export function renderHistory(msgs, { messagesView, activity, markdown, tools, t
             tool_call_id: id,
             name,
             result: resultRow.content || '',
-            ok: resultRow.activity?.ok ?? resultRow.context_meta?.ok ?? null,
+            ok: resultRow.activity?.ok ?? null,
             meta: resultRow.activity?.meta ?? {},
             alias,
           }, { historical: true });

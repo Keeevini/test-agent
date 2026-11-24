@@ -98,12 +98,12 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
       summary.appendChild(timeSpan);
     }
 
-    // Short tool name when context_meta.name is a string.
+    // Short tool name projected from the associated assistant batch.
     const raw = message.raw;
-    if (raw && raw.context_meta && typeof raw.context_meta.name === 'string') {
+    if (typeof message.tool_name === 'string') {
       const toolSpan = document.createElement('span');
       toolSpan.className = 'context-detail-raw-tool';
-      toolSpan.textContent = raw.context_meta.name;
+      toolSpan.textContent = message.tool_name;
       summary.appendChild(toolSpan);
     }
 

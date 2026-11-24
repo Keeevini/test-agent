@@ -11,11 +11,7 @@ Verifies the ``model_calls`` ledger and the tool-result round-trip:
 * two chat calls accumulate to the correct lifetime total with no double
   count;
 * a ``title`` call increments lifetime usage without creating a chat row;
-* tool results persisted in the ``save_tool_result`` shape (success /
-  ToolError / denied / invalid-JSON) round-trip with their ``tool_call_id``
-  and ``context_meta`` intact;
-* legacy plain-text tool rows and malformed-JSON tool content fall back to
-  raw text and are never treated as metadata;
+* literal tool results round-trip with explicit IDs and outcome activity;
 * ``record_model_call`` validates usage before touching the store.
 """
 
@@ -37,19 +33,6 @@ def _usage(prompt: int, completion: int) -> dict[str, Any]:
         "prompt_source": "provider",
         "completion_source": "provider",
     }
-
-
-def _tool_result(call_id: str, name: str, content: str, ok: bool, path=None) -> dict[str, Any]:
-    """Mirror the ``save_tool_result`` closure shape in ``core.stream_turn``."""
-    msg: dict[str, Any] = {
-        "role": "tool",
-        "tool_call_id": call_id,
-        "content": content,
-        "context_meta": {"name": name, "ok": ok},
-    }
-    if name == "read_file" and ok and isinstance(path, str):
-        msg["context_meta"]["path"] = path
-    return msg
 
 
 class ModelCallLedgerTests(TestCase):
@@ -211,103 +194,18 @@ class ModelCallLedgerTests(TestCase):
 
 
 class ToolResultRoundTripTests(TestCase):
-    """Tool-result rows round-trip their ``tool_call_id`` and ``context_meta``."""
-
-    def test_read_file_success_round_trips_with_path(self):
-        """A successful ``read_file`` result keeps its sandbox-relative path."""
+    def test_literal_and_outcome_round_trip(self):
         with TemporaryDirectory() as directory:
             store = SessionStore(Path(directory) / "sessions.db")
             try:
-                store.create_session("s1")
-                msg = _tool_result("call_1", "read_file", "line1\nline2", True, path="notes.md")
-                store.append_message("s1", "tool", msg)
-
-                rows = store.get_messages("s1")
-                tool_rows = [r for r in rows if r.get("role") == "tool"]
-                self.assertEqual(len(tool_rows), 1)
-                self.assertEqual(tool_rows[0]["tool_call_id"], "call_1")
-                self.assertEqual(tool_rows[0]["content"], "line1\nline2")
-                self.assertEqual(
-                    tool_rows[0]["context_meta"],
-                    {"name": "read_file", "ok": True, "path": "notes.md"},
-                )
-            finally:
-                store.close()
-
-    def test_tool_error_round_trips_without_path(self):
-        """A ToolError result keeps ``ok=False`` and carries no path."""
-        with TemporaryDirectory() as directory:
-            store = SessionStore(Path(directory) / "sessions.db")
-            try:
-                store.create_session("s1")
-                msg = _tool_result("call_2", "write_file", "Tool error: blocked", False)
-                store.append_message("s1", "tool", msg)
-
-                rows = store.get_messages("s1")
-                tool_rows = [r for r in rows if r.get("role") == "tool"]
-                self.assertEqual(len(tool_rows), 1)
-                self.assertEqual(tool_rows[0]["tool_call_id"], "call_2")
-                self.assertFalse(tool_rows[0]["context_meta"]["ok"])
-                self.assertNotIn("path", tool_rows[0]["context_meta"])
-            finally:
-                store.close()
-
-    def test_denied_result_round_trips(self):
-        """A denied-approval result keeps ``ok=False`` and the tool name."""
-        with TemporaryDirectory() as directory:
-            store = SessionStore(Path(directory) / "sessions.db")
-            try:
-                store.create_session("s1")
-                msg = _tool_result(
-                    "call_3", "write_file", "User denied this mutating operation.", False
-                )
-                store.append_message("s1", "tool", msg)
-
-                rows = store.get_messages("s1")
-                tool_rows = [r for r in rows if r.get("role") == "tool"]
-                self.assertEqual(len(tool_rows), 1)
-                self.assertEqual(tool_rows[0]["tool_call_id"], "call_3")
-                self.assertEqual(tool_rows[0]["context_meta"]["name"], "write_file")
-                self.assertFalse(tool_rows[0]["context_meta"]["ok"])
-            finally:
-                store.close()
-
-    def test_legacy_plain_text_tool_row_round_trips(self):
-        """A legacy plain-text tool row replays as raw text, not metadata."""
-        with TemporaryDirectory() as directory:
-            store = SessionStore(Path(directory) / "sessions.db")
-            try:
-                store.create_session("s1")
-                store.append_message("s1", "tool", "raw legacy result text")
-
-                rows = store.get_messages("s1")
-                tool_rows = [r for r in rows if r.get("role") == "tool"]
-                self.assertEqual(len(tool_rows), 1)
-                self.assertEqual(
-                    tool_rows[0],
-                    {"role": "tool", "content": "raw legacy result text"},
-                )
-            finally:
-                store.close()
-
-    def test_malformed_json_tool_content_is_not_metadata(self):
-        """Tool content that is not a genuine tool object falls back to raw text."""
-        with TemporaryDirectory() as directory:
-            store = SessionStore(Path(directory) / "sessions.db")
-            try:
-                store.create_session("s1")
-                # Stored content is always a string; these are valid JSON
-                # that parses to a non-tool-object, plus one invalid-JSON case.
-                store.append_message("s1", "tool", '{"foo": "bar"}')
-                store.append_message("s1", "tool", '[1, 2, 3]')
-                store.append_message("s1", "tool", '{"incomplete": ')
-
-                rows = store.get_messages("s1")
-                tool_rows = [r for r in rows if r.get("role") == "tool"]
-                self.assertEqual(len(tool_rows), 3)
-                # Each falls back to the legacy raw-text shape.
-                for row in tool_rows:
-                    self.assertEqual(set(row.keys()), {"role", "content"})
-                    self.assertEqual(row["role"], "tool")
+                store.create_session("s")
+                literal = '{"role":"tool","content":"not an envelope","tool_call_id":"fake"}'
+                for i, (text, ok) in enumerate([(literal, True), ("Tool error", False), ("Denied", False), ("{malformed", True)]):
+                    store.append_message("s", "tool", text, tool_call_id=f"c{i}", activity={"version": 1, "ok": ok})
+                history = store.get_messages("s", include_activity=True)
+                self.assertEqual([r["content"] for r in history], [literal, "Tool error", "Denied", "{malformed"])
+                self.assertEqual([r["tool_call_id"] for r in history], ["c0", "c1", "c2", "c3"])
+                self.assertEqual([r["activity"]["ok"] for r in history], [True, False, False, True])
+                self.assertTrue(all("context_meta" not in r for r in history))
             finally:
                 store.close()

@@ -42,8 +42,7 @@ root, not the submodules.
   still-pending approval when the generator is closed mid-step.
 - Each persisted assistant step records provider/fallback usage once in the ledger
   before tools execute; the usage tracker records tool names only. New tool
-  rows store literal output and `activity.context_meta` (name, outcome, optional
-  successful read path). Title usage is lifetime-only.
+  rows store literal output, explicit `tool_call_id` column and `activity.ok`/formatter metadata. `persist_outcome` is shared by normal and interrupted paths; file attribution joins the batch call arguments. Title usage is lifetime-only.
 - `close()` — closes the model client.
 - Invariant: `stream_turn` is the single place that mutates the message list and
   the store for a turn; `time` stamps (`created`/`streamed`/`completed`) are
@@ -84,11 +83,11 @@ root, not the submodules.
   `asyncio.Lock`s in `lock(session_id)`.
 - `messages(session_id)` seeds a `SYSTEM_PROMPT` on first use (model projection:
   `include_activity=False`). `append_message(session_id, role, content, *,
-  activity=None)`, `update_message_content`, `update_message_activity`, `clear`,
+  activity=None, tool_call_id=None)`, `update_message_content`, `update_message_activity`, `clear`,
   `close`.
 - Proxies for the endpoints: `list`, `get`, `create`, `search`, `update_title`,
   `delete`, `get_messages` (history projection: `include_activity=True`),
-  `record_model_call`, `list_model_calls`, `get_raw_message_page`.
+  `get_context_messages` (history + seq), `record_model_call`, `list_model_calls`, `get_raw_message_page`.
 
 ## `title.py` — `SessionTitleGenerator`
 - `SessionTitleGenerator(model_client)`;

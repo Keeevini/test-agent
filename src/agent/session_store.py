@@ -50,6 +50,7 @@ class SessionStore:
         content: Any,
         *,
         activity: dict[str, Any] | None = None,
+        tool_call_id: str | None = None,
     ) -> int:
         """Append a message to the session in the persistent store.
 
@@ -57,7 +58,7 @@ class SessionStore:
         persistent store and kept separate from the model-facing content.
         """
         return self._store.append_message(
-            session_id, role, content, activity=activity
+            session_id, role, content, activity=activity, tool_call_id=tool_call_id
         )
 
     def update_message_content(self, session_id: str, seq: int, content: Any) -> None:
@@ -108,6 +109,10 @@ class SessionStore:
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Read-only history projection, including presentation metadata."""
         return self._store.get_messages(session_id, include_activity=True)
+
+    def get_context_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Read-only canonical history with durable sequence markers."""
+        return self._store.get_messages(session_id, include_activity=True, include_seq=True)
 
     def record_model_call(
         self,

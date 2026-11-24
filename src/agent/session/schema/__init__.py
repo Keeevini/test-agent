@@ -1,4 +1,4 @@
-"""SQLite DDL and migration logic for the session store.
+"""SQLite canonical DDL and initialization logic for the session store.
 
 The DDL is split into per-table modules so each table's schema can be
 maintained independently:
@@ -14,40 +14,28 @@ from .model_calls import CREATE_MODEL_CALLS_TABLE
 from .sessions import CREATE_SESSIONS_TABLE
 from .indexes import CREATE_INDEXES
 
-SCHEMA_VERSION: int = 2
-
-# Ordered list of DDL statements to execute in sequence.
-_MIGRATIONS: list[tuple[int, str]] = [
-    (1, CREATE_SESSIONS_TABLE),
-    (1, CREATE_MESSAGES_TABLE),
-    (1, CREATE_MODEL_CALLS_TABLE),
-]
+SCHEMA_VERSION: int = 3
 
 
 def apply_schema(conn) -> None:
-    """Apply all schema DDL statements to the connection.
-
-    Version 2 adds the nullable ``activity_json`` column to the
-    ``messages`` table for existing databases. ``CREATE TABLE IF NOT
-    EXISTS`` does not alter old tables, so the column is added with a
-    guarded ``ALTER TABLE`` after the table DDL. New databases already
-    include the column in ``CREATE_MESSAGES_TABLE``.
-    """
-    for _version, ddl in _MIGRATIONS:
-        conn.execute(ddl)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
-    if "activity_json" not in columns:
-        conn.execute("ALTER TABLE messages ADD COLUMN activity_json TEXT")
-    for idx_ddl in CREATE_INDEXES:
-        conn.execute(idx_ddl)
-    conn.commit()
+    """Initialize only a fresh DB or reopen this exact schema; never migrate."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    )}
+    expected = {"sessions", "messages", "model_calls"}
+    if (version != SCHEMA_VERSION and (version != 0 or tables)) or (
+        version == SCHEMA_VERSION and tables != expected
+    ):
+        raise RuntimeError("Incompatible sessions database; configure a fresh database for this rollout.")
+    with conn:
+        conn.execute("BEGIN")
+        for ddl in (CREATE_SESSIONS_TABLE, CREATE_MESSAGES_TABLE, CREATE_MODEL_CALLS_TABLE, *CREATE_INDEXES):
+            conn.execute(ddl)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 __all__ = [
-    "SCHEMA_VERSION",
-    "CREATE_SESSIONS_TABLE",
-    "CREATE_MESSAGES_TABLE",
-    "CREATE_MODEL_CALLS_TABLE",
-    "CREATE_INDEXES",
-    "apply_schema",
+    "SCHEMA_VERSION", "CREATE_SESSIONS_TABLE", "CREATE_MESSAGES_TABLE",
+    "CREATE_MODEL_CALLS_TABLE", "CREATE_INDEXES", "apply_schema",
 ]

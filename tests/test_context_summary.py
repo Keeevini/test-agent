@@ -17,6 +17,7 @@ Covers the ``build_context_summary`` pure function and the HTTP endpoint:
 """
 
 from __future__ import annotations
+import json
 
 import tempfile
 from pathlib import Path
@@ -53,12 +54,12 @@ def _meta(session_id="s1", title="Test", tokens_in=0, tokens_out=0,
 
 
 def _tool_result(call_id, name, content, ok, path=None):
-    """Build the decoded tool message projection returned by the store."""
-    msg = {"role": "tool", "tool_call_id": call_id, "content": content,
-           "context_meta": {"name": name, "ok": ok}}
-    if name == "read_file" and ok and isinstance(path, str):
-        msg["context_meta"]["path"] = path
-    return msg
+    return {"role": "tool", "tool_call_id": call_id, "content": content,
+            "activity": {"version": 1, "ok": ok}}
+
+
+def _assistant_call(call_id, name, path=None):
+    return {"role": "assistant", "content": "ok", "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps({"path": path})}}]}
 
 
 def _make_tool_specs():
@@ -161,8 +162,7 @@ class BuildContextSummaryTests(TestCase):
         ]
         msgs = [
             {"role": "user", "content": "read notes.md"},
-            {"role": "assistant", "content": "ok",
-             "tool_calls": [{"function": {"name": "read_file", "arguments": '{"path":"notes.md"}'}}]},
+            _assistant_call("call_1", "read_file", "notes.md"),
             _tool_result("call_1", "read_file", "file content here", True, path="notes.md"),
         ]
         result = build_context_summary(
@@ -226,10 +226,10 @@ class BuildContextSummaryTests(TestCase):
         meta = _meta()
         msgs = [
             {"role": "user", "content": "read a"},
-            {"role": "assistant", "content": "ok"},
+            _assistant_call("c1", "read_file", "a.md"),
             _tool_result("c1", "read_file", "content A", True, path="a.md"),
             {"role": "user", "content": "read a again"},
-            {"role": "assistant", "content": "ok"},
+            _assistant_call("c2", "read_file", "a.md"),
             _tool_result("c2", "read_file", "content A again longer", True, path="a.md"),
         ]
         result = build_context_summary(
@@ -251,7 +251,7 @@ class BuildContextSummaryTests(TestCase):
         meta = _meta()
         msgs = [
             {"role": "user", "content": "search for x"},
-            {"role": "assistant", "content": "ok"},
+            _assistant_call("c1", "search_text"),
             _tool_result("c1", "search_text", "result lines", True),
         ]
         result = build_context_summary(
@@ -260,29 +260,28 @@ class BuildContextSummaryTests(TestCase):
         )
         self.assertEqual(result["loaded_files"], [])
 
-    def test_malformed_context_meta_not_a_file(self):
-        """A tool row with malformed context_meta is not a loaded file."""
+    def test_malformed_read_arguments_not_a_file(self):
+        """A linked read with invalid arguments is not a loaded file."""
         meta = _meta()
         msgs = [
             {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "hello"},
-            {"role": "tool", "tool_call_id": "x", "content": "data",
-             "context_meta": {"name": "read_file", "ok": True}},
+            _assistant_call("x", "read_file"),
+            {"role": "tool", "tool_call_id": "x", "content": "data", "activity": {"ok": True}},
         ]
         result = build_context_summary(
             meta, msgs, [],
             limit=16384, model="local", tool_specs=[],
         )
-        # No path in context_meta → not a file row.
+        # No valid path in original arguments → not a file row.
         self.assertEqual(result["loaded_files"], [])
 
-    def test_legacy_unlinked_tool_row(self):
-        """A legacy plain-text tool row is not a file, no exception."""
+    def test_unlinked_tool_row(self):
+        """An unmatched tool row is not a file, no exception."""
         meta = _meta()
         msgs = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
-            {"role": "tool", "content": "raw legacy text"},
+            {"role": "tool", "tool_call_id": "missing", "content": "unmatched text"},
         ]
         result = build_context_summary(
             meta, msgs, [],

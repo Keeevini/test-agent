@@ -12,13 +12,13 @@ public entry; the repositories and schema are maintained independently.
 | `message_repo.py` | `messages` table CRUD | `MessagesRepository` | See below. |
 | `models.py` | Row dataclasses | `SessionMeta`, `SessionMessage`, `_utcnow` | See below. |
 | `usage.py` | Per-turn usage tracking | `UsageTracker` | See below. |
+| `tool_links.py` | Batch-scoped result association | `associate_tool_results(messages)` | Result index to unique preceding assistant call; no positional inference. |
 | `schema/` | DDL | `apply_schema`, `SCHEMA_VERSION`, `CREATE_MODEL_CALLS_TABLE` | See `schema/INDEX.md`. |
 
 ## `store.py` — `SessionStore`
 - `SessionStore(db_path)` — opens a thread-safe `sqlite3` connection
   (`check_same_thread=False`, a `threading.Lock`), sets `row_factory=Row`,
-  enables `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON`, then applies
-  the schema.
+  enables foreign keys, checks/initializes the canonical schema, then enables WAL.
 - `close()` — closes the connection under the lock.
 - Inherits session CRUD from `SessionsRepository` and message CRUD from
   `MessagesRepository`.
@@ -48,26 +48,9 @@ public entry; the repositories and schema are maintained independently.
   timestamps alone). "Latest chat call" is `kind == 'chat'` + max `assistant_seq`.
 
 ## `message_repo.py` — `MessagesRepository`
-- `get_messages(session_id, *, include_activity=False) -> list[dict]` —
-  ordered by `seq`; assistant JSON content is deserialized back to a dict.
-  Projects a top-level `tool_call_id` onto tool rows (from version-1 activity
-  metadata, or inferred for legacy batches). Attaches the `activity` field
-  only when `include_activity=True` (history projection); the model
-  projection (`include_activity=False`) keeps `tool_call_id` but omits
-  `activity`.
-- `append_message(session_id, role, content, *, activity=None) -> int` —
-  returns the new `seq` (`MAX(seq)+1`); content may be a `str` (user/system)
-  or `dict` (assistant), JSON-encoded. `activity` is optional presentation
-  metadata stored in the `activity_json` column (separate from model content).
-  Touches the session's `updated_at`. New tool output is literal text with
-  `activity.context_meta` projected as top-level `context_meta`; legacy context
-  JSON envelopes without activity are still decoded.
-- `get_raw_message_page(session_id, offset, limit) -> dict` — read-only
-  paginated page under the store lock: `COUNT(*)` + bounded `SELECT seq, role,
-  content, activity_json ... ORDER BY seq LIMIT ? OFFSET ?`. Returns `{total, offset, limit,
-  has_more, messages}` where each message is `{seq, role, created_ms, raw}` and
-  `raw` is the decoded stored message with activity when present (no inferred IDs). `created_ms` is
-  extracted from `raw.time.created` when present, else `None`.
+- `get_messages(session_id, *, include_activity=False, include_seq=False)` — chronological canonical projection. Assistant JSON decoded; tool content remains literal and `tool_call_id` comes from its column. Activity and seq are opt-in.
+- `append_message(session_id, role, content, *, activity=None, tool_call_id=None) -> int` — returns new `seq`, touches session; tool requires literal string and nonempty explicit ID; non-tool requires null ID. `activity_json` holds outcome/presentation data only.
+- `get_raw_message_page(session_id, offset, limit)` — bounded count + page query, at most one preceding non-tool row for page-boundary association. Entries `{seq, role, created_ms, raw, tool_name?}`. `raw` is the full decoded stored message plus activity; name is derived, not persisted twice. Timestamps only from stored `time.created`.
 - `update_message_content(session_id, seq, content)` — replaces content by `seq`
   (used to stamp timing metadata); leaves `activity_json` untouched.
 - `update_message_activity(session_id, seq, activity)` — replaces the
@@ -79,7 +62,7 @@ public entry; the repositories and schema are maintained independently.
   `from_row(row) -> SessionMeta`.
 - `SessionMessage` — message row dataclass (`session_id`, `seq`, `role`,
   `content`); `to_dict() -> dict` — assistant content parsed as JSON; tool rows
-  parsed when the stored JSON is a genuine tool object, else legacy raw text.
+  always literal text; repository attaches the explicit column ID.
 - `_utcnow() -> str` — current UTC time as `YYYY-MM-DD HH:MM:SS` (SQLite-compatible).
 
 ## `usage.py` — `UsageTracker`
