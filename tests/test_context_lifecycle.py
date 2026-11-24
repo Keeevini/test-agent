@@ -153,6 +153,21 @@ class ContextControllerTests(TestCase):
         self.assertIn("preventDefault()", source)
         self.assertIn("stopPropagation()", source)
 
+    def test_ring_click_wires_toggle(self):
+        source = _read("src", "static", "js", "shell", "context-window.js")
+        self.assertIn("indicator.addEventListener('click', toggle)", source)
+
+    def test_selection_clears_without_opening_or_fetching_null(self):
+        source = _read("src", "static", "js", "shell", "context-window.js")
+        body = _function_body(source, "selectSession")
+        guard = body.index("if (!selectedId)")
+        self.assertLess(body.index("++generation"), guard)
+        self.assertLess(body.index("snapshot = null"), guard)
+        self.assertLess(body.index("status.resetContext()"), guard)
+        self.assertNotIn("openPanel()", body)
+        self.assertRegex(body, r"if \(!selectedId\) \{\s*renderUnavailable\(\);\s*return;")
+        self.assertGreater(body.index("fetchSnapshot(selectedId)"), guard)
+
 
 class ApiLayerTests(TestCase):
     """The transport layer must expose getSessionContext."""
@@ -190,6 +205,15 @@ class ConversationWiringTests(TestCase):
         body = _function_body(source, "loadHistory")
         self.assertIn("status.resetContext()", body)
 
+    def test_implicit_session_create_rebinds_context_before_stream(self):
+        source = _read("src", "static", "js", "conversation", "controller.js")
+        body = _function_body(source, "send")
+        ensure = body.index("await sessions.ensureSession()")
+        rebind = body.index("contextWindow.selectSession(sessions.currentId())", ensure)
+        stream = body.index("api.streamChat(", rebind)
+        self.assertLess(ensure, rebind)
+        self.assertLess(rebind, stream)
+
 
 class AppWiringTests(TestCase):
     """app.js must wire the context window into the session lifecycle and
@@ -213,5 +237,12 @@ class AppWiringTests(TestCase):
     def test_app_starts_first_select_session(self):
         """The first selectSession must run independent of sessions.init()."""
         source = _read("src", "static", "app.js")
-        self.assertIn("void contextWindow.selectSession(sessions.currentId())", source)
+        # onClear already contains this call; assert the top-level startup
+        # sequence, not a match inside a lifecycle handler.
+        bootstrap = source[source.index("void status.checkHealth();"):]
+        self.assertRegex(
+            bootstrap,
+            r"void conversation\.loadHistory\(sessions\.currentId\(\)\);\s*"
+            r"void contextWindow\.selectSession\(sessions\.currentId\(\)\);",
+        )
         self.assertNotIn("await sessions.init()", source)

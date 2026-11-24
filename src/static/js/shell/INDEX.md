@@ -33,7 +33,11 @@ the context-window sidebar, and the accessible delete-confirm dialog.
   opens the panel, setting it closes it. The `.context-open` class on the
   layout element toggles the grid column and the mobile drawer transform.
 - `selectSession(id)` — sets the current selection and fetches a snapshot.
-  Caches the latest accepted snapshot so a re-open renders immediately.
+  **Preserves visibility:** never opens or closes the panel. A null id clears
+  the cached snapshot, resets the ring, and renders unavailable **without a
+  GET**; a non-null id requests a fresh snapshot. An accepted snapshot updates
+  the ring even when the panel is closed; when closed it is cached without
+  mounting/fetching raw rows, so a re-open renders the current cache.
 - `refresh()` — re-fetches the current selection (never mutates `selectedId`).
 - `open()` / `close()` / `toggle()` / `isOpen()` — panel state.
 - **Request-race guard:** a monotonic generation counter + `requestedId ===
@@ -57,16 +61,27 @@ the context-window sidebar, and the accessible delete-confirm dialog.
 ## `context-raw.js` — `createRawMessageInspector({ api, root, sessionId, isCurrent })`
 - One instance per rendered raw section. Owns pagination, accordion DOM, and
   request invalidation. Returns `{ loadFirstPage, loadMore, destroy }`.
-- **Generation/disposed guards:** a monotonic generation counter and a
-  `disposed` flag prevent stale responses from mutating the DOM.
+- **Generation-identity guards:** `isStale(gen)` is parameterized; each
+  `fetchPage` captures `gen = generation` and checks `isStale(gen)` on
+  success, failure, and uses `gen === generation` in `finally` to release
+  `loading` only for the currently owned generation. `loadFirstPage` bumps
+  generation before the first fetch; `loadMore` requires
+  `generation > 0` and a matching generation. `destroy()` bumps generation
+  and disposes, invalidating all pending completions.
+- **One "Raw messages" heading:** the DOM initialization appends a single
+  `<h3 class="context-detail-heading">Raw messages</h3>` after
+  `root.replaceChildren()`, before the status, rows, and controls.
 - **Native `<details>` rows:** each message row is a `<details><summary>`
   pair with role, seq, optional `created_ms` timestamp, and tool name.
   JSON is lazy-rendered via `JSON.stringify(raw, null, 2)` into
   `<pre><code>` `textContent` only on first expansion (no `innerHTML` from
   raw data).
 - **"Load more" button:** shown when `has_more` is true; appends the next page
-  to the existing rows. "Retry" button shown on fetch errors.
-- **"Showing N of total"** status line. "No stored messages" empty state.
+  to the existing rows. "Retry" button shown on fetch errors. Both controls
+  are hidden via the `hidden` attribute (CSS `display: none !important`
+  override in `context-panel.css`).
+- **Status line:** "No stored messages · Showing 0 of 0" for an empty page;
+  "Showing N of M" otherwise.
 - **Security:** raw message data is untrusted local content. All message
   content is rendered with `textContent` only; never `innerHTML`.
 

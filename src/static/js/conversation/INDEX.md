@@ -25,8 +25,10 @@ group contexts so a live stream and a replay never share state.
 - `send(text)` — guards on `busy`/empty and `sessions.isTransitioning()`;
   **sets busy synchronously before the first `await`** (fix (c)) so a rapid
   second send cannot start a second turn while `ensureSession()` is pending.
-  Calls `sessions.ensureSession()`, then iterates `api.streamChat` and
-  dispatches each event. On completion/abort it finalizes reasoning, removes
+  Calls `sessions.ensureSession()`, and on the implicit-creation path
+  rebinds `contextWindow.selectSession(sessions.currentId())` before
+  `sessions.refresh()`, then iterates `api.streamChat` and dispatches each
+  event. On completion/abort it finalizes reasoning, removes
   the cursor, and renders the final Markdown via `flushFinal` (which cancels
   the pending RAF and renders synchronously — fix (d)). Refreshes the sidebar
   in `finally`.

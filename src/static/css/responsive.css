@@ -24,6 +24,7 @@
    backdrop. The `hidden` attribute keeps the aside out of flow until opened;
    the `.context-open` class on the layout slides it in. */
 @media (max-width: 1100px) {
+  .layout.context-open { grid-template-columns: 280px minmax(0, 1fr); }
   .context-sidebar {
     position: fixed;
     top: 0; right: 0; bottom: 0;
@@ -41,6 +42,9 @@
     opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
   }
   .context-backdrop.open { opacity: 1; pointer-events: auto; }
+}
+@media (max-width: 920px) {
+  .layout.context-open { grid-template-columns: minmax(0, 1fr); }
 }
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {

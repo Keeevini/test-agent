@@ -344,3 +344,8 @@ details[open] > .context-detail-raw-summary .context-detail-raw-chevron {
   display: block;
   width: 100%;
 }
+
+.context-detail-raw-loadmore[hidden],
+.context-detail-raw-retry[hidden] {
+  display: none !important;
+}

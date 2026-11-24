@@ -202,7 +202,12 @@ export function createConversationController({ api, sessions, messages, status, 
 
     try {
       await sessions.ensureSession();
-      if (sessionJustCreated) sessions.refresh();
+      if (sessionJustCreated) {
+        // The first send can create an id after active-session deletion.
+        // Rebind the view before SSE/final refreshes target this session.
+        contextWindow.selectSession(sessions.currentId());
+        sessions.refresh();
+      }
 
       for await (const event of api.streamChat({ session_id: sessions.currentId(), message: trimmed }, signal)) {
         dispatch(event);

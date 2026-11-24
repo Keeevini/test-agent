@@ -82,4 +82,5 @@ window.addEventListener('offline', () => status.showOffline());
 void status.checkHealth();
 void sessions.init().catch(error => console.warn('Session initialization failed', error));
 void conversation.loadHistory(sessions.currentId());
+void contextWindow.selectSession(sessions.currentId());
 byId('prompt').focus();

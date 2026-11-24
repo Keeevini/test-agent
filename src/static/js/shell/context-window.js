@@ -32,6 +32,8 @@ export function createContextWindowController({ api, status, layout, indicator, 
     // selection; a fresh selectSession falls through to the loading state.
     if (snapshot && snapshot.id === selectedId) {
       renderSnapshot(snapshot.data);
+    } else if (!selectedId) {
+      renderUnavailable();
     }
   }
 
@@ -65,11 +67,18 @@ export function createContextWindowController({ api, status, layout, indicator, 
   }
 
   function selectSession(id) {
-    selectedId = id;
+    // Invalidate in-flight work even when the new selection has no id.
+    ++generation;
+    selectedId = id ?? null;
+    snapshot = null;
     inspector?.destroy();
     inspector = null;
-    openPanel();
-    void fetchSnapshot(id);
+    status.resetContext();
+    if (!selectedId) {
+      renderUnavailable();
+      return;
+    }
+    void fetchSnapshot(selectedId);
   }
 
   // Re-fetches the current selection. Never mutates selectedId.
@@ -80,18 +89,23 @@ export function createContextWindowController({ api, status, layout, indicator, 
 
   async function fetchSnapshot(requestedId) {
     const gen = ++generation;
+    // Retire the previous raw inspector before replacing its DOM, including
+    // same-session refreshes. A pending snapshot is not a reusable cache.
+    inspector?.destroy();
+    inspector = null;
+    snapshot = null;
     panelBody.textContent = 'Loading context…';
     try {
       const data = await api.getSessionContext(requestedId);
-      // Guard: a stale response (older generation) or a session switch must
-      // not redraw the panel.
       if (generation !== gen || requestedId !== selectedId) return;
       snapshot = { id: requestedId, data };
-      renderSnapshot(data);
       status.updateContext(data);
+      if (open) renderSnapshot(data);
+      else clearBody();
     } catch (error) {
       if (generation !== gen || requestedId !== selectedId) return;
       if (String((error && error.message) || '').includes('404')) {
+        status.resetContext();
         renderUnavailable();
       } else {
         renderError();
@@ -146,6 +160,7 @@ export function createContextWindowController({ api, status, layout, indicator, 
     }
   }
 
+  indicator.addEventListener('click', toggle);
   closeButton.addEventListener('click', () => closePanel());
   backdrop.addEventListener('click', () => closePanel());
 

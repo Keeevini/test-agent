@@ -22,8 +22,8 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
   let loadMoreBtn = null;
   let retryBtn = null;
 
-  function isStale() {
-    return disposed || generation === 0 || !isCurrent();
+  function isStale(gen) {
+    return disposed || gen !== generation || !isCurrent();
   }
 
   function clearRows() {
@@ -142,14 +142,14 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
   }
 
   async function fetchPage(offset, isAppend) {
-    if (loading) return; // prevent duplicate concurrent loads
+    if (loading || isStale(generation)) return; // prevent duplicate concurrent loads
     loading = true;
     const gen = generation;
 
     try {
       const data = await api.getContextRawMessages(sessionId, { offset, limit: 20 });
 
-      if (isStale()) return;
+      if (isStale(gen)) return;
 
       total = data.total;
       nextOffset = data.offset + data.messages.length;
@@ -163,7 +163,9 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
       appendRows(data.messages);
 
       // Update status.
-      setStatus(`Showing ${loadedCount} of ${total}`);
+      setStatus(total === 0
+        ? 'No stored messages · Showing 0 of 0'
+        : `Showing ${loadedCount} of ${total}`);
 
       // Load more button.
       showLoadMore(data.has_more);
@@ -174,16 +176,16 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
         retryBtn.disabled = true;
       }
     } catch (error) {
-      if (isStale()) return;
+      if (isStale(gen)) return;
       const msg = (error && error.message) || 'Unknown error';
       showError(`Unable to load raw messages: ${msg}`);
     } finally {
-      loading = false;
+      if (gen === generation) loading = false;
     }
   }
 
   function loadFirstPage() {
-    if (isStale()) return;
+    if (disposed || !isCurrent()) return;
     generation++;
     loading = false;
     nextOffset = 0;
@@ -200,7 +202,7 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
   }
 
   function loadMore() {
-    if (isStale() || loading) return;
+    if (generation === 0 || isStale(generation) || loading) return;
     void fetchPage(nextOffset, true);
   }
 
@@ -212,6 +214,12 @@ export function createRawMessageInspector({ api, root, sessionId, isCurrent }) {
 
   // Initialize DOM structure.
   root.replaceChildren();
+
+  const heading = document.createElement('h3');
+  heading.className = 'context-detail-heading';
+  heading.textContent = 'Raw messages';
+  root.appendChild(heading);
+
   statusEl = document.createElement('div');
   statusEl.className = 'context-detail-raw-status';
   root.appendChild(statusEl);
