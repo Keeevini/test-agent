@@ -7,9 +7,9 @@ Covers the ``build_context_summary`` pure function and the HTTP endpoint:
 * two completed calls + title call → latest chat only, no lifetime leak
 * trailing tool result after last assistant → mixed_estimate
 * provider-based source flags
-* estimated breakdown reconciliation invariants
+* independent attribution invariants
 * loaded_files: repeated read_file by path, search_text excluded,
-  malformed context_meta, legacy unlinked rows
+  malformed arguments, unlinked rows
 * over-capacity (>100%)
 * 404 on missing session
 * route ordering (search not captured by parameterized route)
@@ -98,7 +98,7 @@ class BuildContextSummaryTests(TestCase):
         cat_sum = sum(b[k] for k in ("previous_compaction", "user_input",
                                        "loaded_files", "model_reasoning",
                                        "tool_usage", "other"))
-        self.assertEqual(cat_sum, result["used_tokens"])
+        self.assertEqual(cat_sum, result["attributed_tokens"])
 
     def test_system_only_pre_response(self):
         """A session with only a system row shows configured prompt."""
@@ -117,7 +117,7 @@ class BuildContextSummaryTests(TestCase):
         meta = _meta(tokens_in=320, tokens_out=70, tokens_total=390)
         calls = [
             {"session_id": "s1", "call_key": "chat:2", "kind": "chat",
-             "assistant_seq": 2, "prompt_tokens": 120, "completion_tokens": 30,
+             "assistant_seq": 1, "prompt_tokens": 120, "completion_tokens": 30,
              "prompt_source": "provider", "completion_source": "provider",
              "recorded_at": "2025-01-01 00:00:01"},
             {"session_id": "s1", "call_key": "chat:3", "kind": "chat",
@@ -149,14 +149,14 @@ class BuildContextSummaryTests(TestCase):
         cat_sum = sum(b[k] for k in ("previous_compaction", "user_input",
                                        "loaded_files", "model_reasoning",
                                        "tool_usage", "other"))
-        self.assertEqual(cat_sum, result["used_tokens"])
+        self.assertEqual(cat_sum, result["attributed_tokens"])
 
     def test_trailing_tool_result_makes_mixed_estimate(self):
         """A trailing read_file result after the last assistant → mixed."""
         meta = _meta(tokens_in=120, tokens_out=30, tokens_total=150)
         calls = [
             {"session_id": "s1", "call_key": "chat:2", "kind": "chat",
-             "assistant_seq": 2, "prompt_tokens": 120, "completion_tokens": 30,
+             "assistant_seq": 1, "prompt_tokens": 120, "completion_tokens": 30,
              "prompt_source": "provider", "completion_source": "provider",
              "recorded_at": "2025-01-01 00:00:01"},
         ]
@@ -180,7 +180,7 @@ class BuildContextSummaryTests(TestCase):
         cat_sum = sum(b[k] for k in ("previous_compaction", "user_input",
                                        "loaded_files", "model_reasoning",
                                        "tool_usage", "other"))
-        self.assertEqual(cat_sum, result["used_tokens"])
+        self.assertEqual(cat_sum, result["attributed_tokens"])
 
     def test_provider_based_source(self):
         """Both prompt and completion from provider, no trailing → provider_based."""
@@ -317,13 +317,14 @@ class BuildContextSummaryTests(TestCase):
              "prompt_source": "provider", "completion_source": "provider",
              "recorded_at": "2025-01-01 00:00:01"},
         ]
-        msgs = []
+        msgs = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "thinking"}]
         result = build_context_summary(
             meta, msgs, calls,
             limit=16384, model="local", tool_specs=[],
         )
         self.assertEqual(result["used_tokens"], 0)
         self.assertEqual(result["used_source"], "provider_based")
+        self.assertGreater(result["attributed_tokens"], 0)
 
     def test_lifetime_source_none(self):
         """No calls → lifetime source 'none'."""
@@ -350,8 +351,8 @@ class BuildContextSummaryTests(TestCase):
         self.assertEqual(result["session_lifetime"]["source"], "provider")
         self.assertEqual(result["session_lifetime"]["tokens_total"], 150)
 
-    def test_breakdown_reconciliation_invariant(self):
-        """Category sums always equal used_tokens."""
+    def test_breakdown_attribution_invariant(self):
+        """Category sums equal attributed_tokens, not provider occupancy."""
         meta = _meta(tokens_in=100, tokens_out=50, tokens_total=150)
         calls = [
             {"session_id": "s1", "call_key": "chat:1", "kind": "chat",
@@ -374,7 +375,7 @@ class BuildContextSummaryTests(TestCase):
         cat_sum = sum(b[k] for k in ("previous_compaction", "user_input",
                                        "loaded_files", "model_reasoning",
                                        "tool_usage", "other"))
-        self.assertEqual(cat_sum, result["used_tokens"])
+        self.assertEqual(cat_sum, result["attributed_tokens"])
         self.assertEqual(sum(f["tokens"] for f in result["loaded_files"]),
                           b["loaded_files"])
         self.assertEqual(result["free_tokens"],
@@ -440,7 +441,7 @@ class ContextEndpointTests(TestCase):
                 cat_sum = sum(b[k] for k in ("previous_compaction", "user_input",
                                                "loaded_files", "model_reasoning",
                                                "tool_usage", "other"))
-                self.assertEqual(cat_sum, data["used_tokens"])
+                self.assertEqual(cat_sum, data["attributed_tokens"])
             finally:
                 store.close()
 
