@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS messages (
     seq INTEGER NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
+    activity_json TEXT,
     PRIMARY KEY (session_id, seq),
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 )

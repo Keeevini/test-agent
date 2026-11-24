@@ -12,7 +12,7 @@ preserved verbatim across these files, and the cascade order is retained
 | `layout.css` | App shell, topbar, badge, layout grid, chat panel. | |
 | `sessions.css` | Sidebar, session list, rows, delete button, drawer. | |
 | `conversation.css` | Messages, empty state, examples, stream cursor, Markdown, composer. | |
-| `activity.css` | Activity cards, reasoning/tool/result/approval, context indicator. | |
+| `activity.css` | Activity cards, reasoning/tool/result/approval, context indicator. Approval state colors (`.approved`/`.denied`/`.cancelled`); `.resolved`/`.historical` disable the pulse animation. | |
 | `dialogs.css` | Confirmation dialog (themed, non-native). | |
 | `responsive.css` | Mobile drawer, reduced motion, print. | |
 

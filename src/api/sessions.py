@@ -44,7 +44,7 @@ def serialize_session(meta) -> dict:
     }
 
 
-def create_sessions_router(sessions) -> APIRouter:
+def create_sessions_router(sessions, tools=None) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/session/clear')
@@ -99,6 +99,9 @@ def create_sessions_router(sessions) -> APIRouter:
     async def get_messages(session_id: str):
         """Get all messages for a session."""
         msgs = sessions.get_messages(session_id)
-        return {"messages": msgs}
+        return {
+            "messages": msgs,
+            "tool_aliases": tools.aliases if tools is not None else {},
+        }
 
     return router

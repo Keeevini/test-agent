@@ -37,13 +37,22 @@ public entry; the repositories and schema are maintained independently.
 - `set_model(session_id, model)`.
 
 ## `message_repo.py` — `MessagesRepository`
-- `get_messages(session_id) -> list[dict]` — ordered by `seq`; assistant JSON
-  content is deserialized back to a dict.
-- `append_message(session_id, role, content) -> int` — returns the new `seq`
-  (`MAX(seq)+1`); content may be a `str` (user/system) or `dict` (assistant),
-  JSON-encoded. Touches the session's `updated_at`.
+- `get_messages(session_id, *, include_activity=False) -> list[dict]` —
+  ordered by `seq`; assistant JSON content is deserialized back to a dict.
+  Projects a top-level `tool_call_id` onto tool rows (from version-1 activity
+  metadata, or inferred for legacy batches). Attaches the `activity` field
+  only when `include_activity=True` (history projection); the model
+  projection (`include_activity=False`) keeps `tool_call_id` but omits
+  `activity`.
+- `append_message(session_id, role, content, *, activity=None) -> int` —
+  returns the new `seq` (`MAX(seq)+1`); content may be a `str` (user/system)
+  or `dict` (assistant), JSON-encoded. `activity` is optional presentation
+  metadata stored in the `activity_json` column (separate from model content).
+  Touches the session's `updated_at`.
 - `update_message_content(session_id, seq, content)` — replaces content by `seq`
-  (used to stamp timing metadata).
+  (used to stamp timing metadata); leaves `activity_json` untouched.
+- `update_message_activity(session_id, seq, activity)` — replaces the
+  `activity_json` column by `seq`; leaves `content` untouched.
 
 ## `models.py`
 - `SessionMeta` — session row dataclass (`session_id`, `title`, `model`,

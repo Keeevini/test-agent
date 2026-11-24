@@ -43,13 +43,32 @@ class SessionStore:
             msgs = self._store.get_messages(session_id)
         return msgs
 
-    def append_message(self, session_id: str, role: str, content: Any) -> int:
-        """Append a message to the session in the persistent store."""
-        return self._store.append_message(session_id, role, content)
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: Any,
+        *,
+        activity: dict[str, Any] | None = None,
+    ) -> int:
+        """Append a message to the session in the persistent store.
+
+        ``activity`` is optional presentation metadata, forwarded to the
+        persistent store and kept separate from the model-facing content.
+        """
+        return self._store.append_message(
+            session_id, role, content, activity=activity
+        )
 
     def update_message_content(self, session_id: str, seq: int, content: Any) -> None:
         """Update the content of an existing message by its sequence number."""
         self._store.update_message_content(session_id, seq, content)
+
+    def update_message_activity(
+        self, session_id: str, seq: int, activity: dict[str, Any]
+    ) -> None:
+        """Update the presentation metadata of an existing message."""
+        self._store.update_message_activity(session_id, seq, activity)
 
     def clear(self, session_id: str) -> None:
         self._store.delete_session(session_id)
@@ -87,4 +106,9 @@ class SessionStore:
         self._locks.pop(session_id, None)
 
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
-        return self._store.get_messages(session_id)
+        """Return messages for the API history (with ``activity`` attached).
+
+        This is the history projection. The model projection is
+        ``messages()``, which uses the default ``include_activity=False``.
+        """
+        return self._store.get_messages(session_id, include_activity=True)
